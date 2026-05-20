@@ -1,13 +1,15 @@
 import json
+import time
 import urllib.request
 from datetime import datetime, timedelta
+from pathlib import Path
 
 # YOUR SETTINGS
 NTFY_TOPIC     = "my-contract-test"
-SEND_REAL_PUSH = True
 MIN_AWARD      = 5_000_000
 BUSINESS_TYPES = []
-LOOKBACK_DAYS  = 7
+CHECK_MINUTES  = 60
+LOOKBACK_HOURS = 2
 KEYWORDS = {
     "cybersecurity": 5,
     "cyber":         4,
@@ -66,6 +68,15 @@ KNOWN_PUBLIC = {
     "Vertex":              "VERX",
 }
 
+SEEN_FILE = "seen.json"
+
+def load_seen():
+    p = Path(SEEN_FILE)
+    return set(json.loads(p.read_text())) if p.exists() else set()
+
+def save_seen(seen):
+    Path(SEEN_FILE).write_text(json.dumps(list(seen)[-5000:]))
+
 def fmt(n):
     v = float(n or 0)
     if v >= 1e9: return f"${v/1e9:.2f}B"
@@ -98,7 +109,7 @@ def get_stock_price(ticker):
 
 def fetch_awards():
     end   = datetime.now()
-    start = end - timedelta(days=LOOKBACK_DAYS)
+    start = end - timedelta(hours=LOOKBACK_HOURS)
     filters = {
         "award_type_codes": ["A","B","C","D"],
         "time_period": [{"start_date": start.strftime("%Y-%m-%d"),
@@ -120,29 +131,38 @@ def fetch_awards():
         "https://api.usaspending.gov/api/v2/search/spending_by_award/",
         data=payload,
         headers={"Content-Type": "application/json",
-                 "User-Agent": "ContractBotPrototype/1.0"},
+                 "User-Agent": "ContractBot/1.0"},
         method="POST",
     )
-    print("Fetching from USASpending.gov...")
     with urllib.request.urlopen(req, timeout=30) as r:
         data = json.loads(r.read())
-    total = data.get("page_metadata", {}).get("total", 0)
-    print(f"Connected - {total:,} total contracts found\n")
     return data.get("results", [])
 
 def send_push(award, ticker, score, price, cap):
-    recipient = award.get("Recipient Name", "Unknown")
-    amount    = fmt(award.get("Award Amount"))
-    agency    = award.get("Awarding Agency", "")
-    award_id  = award.get("Award ID", "")
-    amt_val   = float(award.get("Award Amount") or 0)
-    priority  = "urgent" if amt_val >= 50_000_000 else "high"
-    title     = f"${ticker} - {recipient}" if ticker else recipient
-    parts     = [amount, agency]
-    if price:  parts.append(f"Stock ${price:.2f}")
-    if cap:    parts.append(f"MCap {cap}")
-    if score:  parts.append(f"Score {score}")
-    body = " | ".join(parts)
+    recipient  = award.get("Recipient Name", "Unknown")
+    amount     = fmt(award.get("Award Amount"))
+    agency     = award.get("Awarding Agency", "")
+    award_id   = award.get("Award ID", "")
+    amt_val    = float(award.get("Award Amount") or 0)
+    desc       = (award.get("Description") or "No description")[:120]
+    start_date = award.get("Start Date", "Unknown")
+    end_date   = award.get("End Date", "Unknown")
+    alerted_at = datetime.now().strftime("%b %d %Y at %I:%M %p")
+    priority   = "urgent" if amt_val >= 50_000_000 else "high"
+
+    title = f"${ticker} | {recipient}" if ticker else recipient
+
+    lines = []
+    lines.append(f"Contract Value: {amount}")
+    lines.append(f"Awarded: {start_date}")
+    lines.append(f"Expires: {end_date}")
+    lines.append(f"Agency: {agency}")
+    if price: lines.append(f"Stock Price: ${price:.2f}")
+    if cap:   lines.append(f"Market Cap: {cap}")
+    lines.append(f"What: {desc}")
+    lines.append(f"Alert sent: {alerted_at}")
+    body = "\n".join(lines)
+
     req = urllib.request.Request(
         f"https://ntfy.sh/{NTFY_TOPIC}",
         data=body.encode(),
@@ -157,86 +177,56 @@ def send_push(award, ticker, score, price, cap):
     with urllib.request.urlopen(req, timeout=10):
         pass
 
-def run():
-    print("=" * 60)
-    print("  CONTRACT ALERT BOT - PUBLICLY TRADED COMPANIES")
-    print("=" * 60)
-    print(f"  Min award  : {fmt(MIN_AWARD)}")
-    print(f"  Lookback   : {LOOKBACK_DAYS} days")
-    print(f"  Watching   : {len(KNOWN_PUBLIC)} companies")
-    print(f"  Real push  : {'YES - ' + NTFY_TOPIC if SEND_REAL_PUSH else 'NO (dry run)'}")
-    print("=" * 60)
-    print()
+def check():
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n[{now}] Checking USASpending.gov...")
 
     try:
         awards = fetch_awards()
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"  Fetch error: {e}")
         return
 
-    hits = []
+    seen = load_seen()
+    new_count = 0
+
     for award in awards:
+        award_id = award.get("Award ID", "")
+        if not award_id or award_id in seen:
+            continue
+
         ticker, company = find_ticker(award.get("Recipient Name", ""))
-        if company:
-            score = keyword_score(award)
-            hits.append((award, ticker, company, score))
+        if not company:
+            continue
 
-    hits.sort(key=lambda x: (
-        0 if x[1] else 1,
-        -x[3],
-        -float(x[0].get("Award Amount") or 0)
-    ))
-
-    print(f"Scanned  : {len(awards)} contracts")
-    print(f"Matched  : {len(hits)} from known public companies")
-    print(f"Traded   : {sum(1 for h in hits if h[1])} with tickers\n")
-
-    if not hits:
-        print("No matches found. Try increasing LOOKBACK_DAYS to 30 or 60.")
-        return
-
-    print("=" * 60)
-    print("INVESTMENT LEADS:")
-    print("=" * 60)
-
-    for i, (award, ticker, company, score) in enumerate(hits, 1):
-        amt  = float(award.get("Award Amount") or 0)
-        city = award.get("Place of Performance City Name", "")
-        st   = award.get("Place of Performance State Code", "")
-        loc  = ", ".join(filter(None, [city, st])) or "N/A"
-        desc = (award.get("Description") or "")[:150]
+        score = keyword_score(award)
+        amt   = float(award.get("Award Amount") or 0)
+        print(f"  NEW: {award.get('Recipient Name')} | {fmt(amt)} | ${ticker or 'PRIVATE'}")
 
         price, cap = None, None
         if ticker:
             price, cap = get_stock_price(ticker)
 
-        flag    = f"${ticker}" if ticker else "PRIVATE"
-        urgency = "URGENT" if amt >= 50_000_000 else "ALERT"
+        try:
+            send_push(award, ticker, score, price, cap)
+            print(f"  PUSHED to phone")
+        except Exception as e:
+            print(f"  Push failed: {e}")
 
-        print(f"\n[{i}] {urgency} | {flag}")
-        print(f"  Company : {award.get('Recipient Name','Unknown')}")
-        if ticker:
-            line = f"  Stock   : ${ticker}"
-            if price: line += f"  |  Price: ${price:.2f}"
-            if cap:   line += f"  |  Mkt Cap: {cap}"
-            print(line)
-        print(f"  Award   : {fmt(amt)}")
-        print(f"  Agency  : {award.get('Awarding Agency','')}")
-        print(f"  Location: {loc}")
-        print(f"  Score   : {score}")
-        print(f"  Desc    : {desc}")
-        print(f"  Link    : https://usaspending.gov/award/{award.get('Award ID','')}")
+        seen.add(award_id)
+        new_count += 1
 
-        if SEND_REAL_PUSH and i <= 10:
-            try:
-                send_push(award, ticker, score, price, cap)
-                print(f"  PUSHED to ntfy.sh/{NTFY_TOPIC}")
-            except Exception as e:
-                print(f"  Push failed: {e}")
+    save_seen(seen)
+    print(f"  Done - {new_count} new alerts sent")
 
-    print("\n" + "=" * 60)
-    traded = sum(1 for h in hits if h[1])
-    print(f"Done - {traded} publicly traded | {len(hits)-traded} private matched")
-    print("=" * 60)
+# MAIN LOOP
+print("=" * 60)
+print("  CONTRACT ALERT BOT - RUNNING 24/7")
+print(f"  Checking every {CHECK_MINUTES} minutes")
+print(f"  Alerting to ntfy.sh/{NTFY_TOPIC}")
+print("=" * 60)
 
-run()
+check()
+while True:
+    time.sleep(CHECK_MINUTES * 60)
+    check()
