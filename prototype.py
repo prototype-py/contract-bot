@@ -34,12 +34,10 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # =========================================================
-# KNOWN COMPANIES — fast lookup first
-# Falls back to SEC EDGAR + Yahoo Finance for unknown companies
+# KNOWN COMPANIES
 # =========================================================
 
 KNOWN = {
-    # USA
     "Booz Allen":          {"ticker": "BAH",    "exchange": "NYSE",   "currency": "USD"},
     "Leidos":              {"ticker": "LDOS",   "exchange": "NYSE",   "currency": "USD"},
     "SAIC":                {"ticker": "SAIC",   "exchange": "NYSE",   "currency": "USD"},
@@ -76,27 +74,21 @@ KNOWN = {
     "VSE Corporation":     {"ticker": "VSEC",   "exchange": "NASDAQ", "currency": "USD"},
     "DXC":                 {"ticker": "DXC",    "exchange": "NYSE",   "currency": "USD"},
     "IBM":                 {"ticker": "IBM",    "exchange": "NYSE",   "currency": "USD"},
-    # UK — LSE listed
     "BAE Systems":         {"ticker": "BA.L",   "exchange": "LSE",    "currency": "GBP"},
     "Rolls-Royce":         {"ticker": "RR.L",   "exchange": "LSE",    "currency": "GBP"},
     "QinetiQ":             {"ticker": "QQ.L",   "exchange": "LSE",    "currency": "GBP"},
     "Babcock":             {"ticker": "BAB.L",  "exchange": "LSE",    "currency": "GBP"},
     "Serco":               {"ticker": "SRP.L",  "exchange": "LSE",    "currency": "GBP"},
     "Capita":              {"ticker": "CPI.L",  "exchange": "LSE",    "currency": "GBP"},
-    "Meggitt":             {"ticker": "MGGT.L", "exchange": "LSE",    "currency": "GBP"},
     "Kier":                {"ticker": "KIE.L",  "exchange": "LSE",    "currency": "GBP"},
     "Balfour Beatty":      {"ticker": "BBY.L",  "exchange": "LSE",    "currency": "GBP"},
-    "Intertek":            {"ticker": "ITRK.L", "exchange": "LSE",    "currency": "GBP"},
     "G4S":                 {"ticker": "GFS.L",  "exchange": "LSE",    "currency": "GBP"},
-    "Mott MacDonald":      {"ticker": "MOTT.L", "exchange": "LSE",    "currency": "GBP"},
-    # Canada — TSX listed
     "CAE":                 {"ticker": "CAE.TO", "exchange": "TSX",    "currency": "CAD"},
     "MDA":                 {"ticker": "MDA.TO", "exchange": "TSX",    "currency": "CAD"},
     "Magellan Aerospace":  {"ticker": "MAL.TO", "exchange": "TSX",    "currency": "CAD"},
     "Heroux-Devtek":       {"ticker": "HRX.TO", "exchange": "TSX",    "currency": "CAD"},
     "Calian":              {"ticker": "CGY.TO", "exchange": "TSX",    "currency": "CAD"},
     "SNC-Lavalin":         {"ticker": "SNC.TO", "exchange": "TSX",    "currency": "CAD"},
-    # Israel — NASDAQ listed
     "Elbit Systems":       {"ticker": "ESLT",   "exchange": "NASDAQ", "currency": "USD"},
     "CyberArk":            {"ticker": "CYBR",   "exchange": "NASDAQ", "currency": "USD"},
     "Check Point":         {"ticker": "CHKP",   "exchange": "NASDAQ", "currency": "USD"},
@@ -220,9 +212,6 @@ def get_stock_info(ticker):
 
 # =========================================================
 # COMPANY LOOKUP
-# 1. Known list (instant)
-# 2. Cache (instant)
-# 3. SEC EDGAR + Yahoo Finance verification (2-3 sec)
 # =========================================================
 
 def search_edgar(company_name):
@@ -296,7 +285,7 @@ def get_insider_activity(ticker):
         return None
 
 # =========================================================
-# FETCH USA — USASpending.gov
+# FETCH USA
 # =========================================================
 
 def fetch_us_awards():
@@ -327,26 +316,26 @@ def fetch_us_awards():
     results = []
     for a in data.get("results", []):
         results.append({
-            "id":        a.get("Award ID",""),
-            "recipient": a.get("Recipient Name",""),
-            "amount":    float(a.get("Award Amount") or 0),
-            "amount_usd":float(a.get("Award Amount") or 0),
-            "currency":  "USD",
-            "agency":    a.get("Awarding Agency",""),
-            "desc":      (a.get("Description") or "")[:200],
-            "awarded":   a.get("Start Date",""),
-            "expires":   a.get("End Date",""),
-            "location":  ", ".join(filter(None,[
+            "id":         a.get("Award ID",""),
+            "recipient":  a.get("Recipient Name",""),
+            "amount":     float(a.get("Award Amount") or 0),
+            "amount_usd": float(a.get("Award Amount") or 0),
+            "currency":   "USD",
+            "agency":     a.get("Awarding Agency",""),
+            "desc":       (a.get("Description") or "")[:200],
+            "awarded":    a.get("Start Date",""),
+            "expires":    a.get("End Date",""),
+            "location":   ", ".join(filter(None,[
                 a.get("Place of Performance City Name",""),
                 a.get("Place of Performance State Code","")
             ])),
-            "country":   "USA",
-            "source":    "USASpending.gov",
+            "country":    "USA",
+            "source":     "USASpending.gov",
         })
     return results
 
 # =========================================================
-# FETCH UK — Contracts Finder OCDS
+# FETCH UK
 # =========================================================
 
 def fetch_uk_awards():
@@ -375,18 +364,18 @@ def fetch_uk_awards():
                 awarded   = (award.get("date") or "")[:10]
                 expires   = ((award.get("contractPeriod") or {}).get("endDate") or "")[:10]
                 results.append({
-                    "id":        release.get("ocid",""),
-                    "recipient": name,
-                    "amount":    amount_gbp,
-                    "amount_usd":amount_gbp * fx,
-                    "currency":  "GBP",
-                    "agency":    buyer,
-                    "desc":      desc,
-                    "awarded":   awarded,
-                    "expires":   expires,
-                    "location":  "United Kingdom",
-                    "country":   "UK",
-                    "source":    "Contracts Finder (UK)",
+                    "id":         release.get("ocid",""),
+                    "recipient":  name,
+                    "amount":     amount_gbp,
+                    "amount_usd": amount_gbp * fx,
+                    "currency":   "GBP",
+                    "agency":     buyer,
+                    "desc":       desc,
+                    "awarded":    awarded,
+                    "expires":    expires,
+                    "location":   "United Kingdom",
+                    "country":    "UK",
+                    "source":     "Contracts Finder (UK)",
                 })
         return results
     except Exception as e:
@@ -394,55 +383,72 @@ def fetch_uk_awards():
         return []
 
 # =========================================================
-# FETCH CANADA — open data CSV (updated daily)
+# FETCH CANADA
 # =========================================================
 
 def fetch_canada_awards():
     try:
-        # Canada publishes a daily CSV of new award notices
-        url = "https://canadabuys.canada.ca/opendata/pub/newAwardNotice-nouvelAvisAttribution.csv"
-        req = urllib.request.Request(url,
-            headers={"User-Agent":"ContractBot/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            content = r.read().decode("utf-8-sig")
         fx      = get_fx_rate("CAD")
         min_cad = MIN_AWARD_USD / fx
+        since   = (datetime.now()-timedelta(hours=LOOKBACK_HOURS)).strftime("%Y-%m-%d")
+        # Current fiscal year CSV — updated every morning by Canada government
+        url = "https://canadabuys.canada.ca/opendata/pub/2026-2027-awardNotice-avisAttribution.csv"
+        req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            content = r.read().decode("utf-8-sig")
         results = []
         reader  = csv.DictReader(io.StringIO(content))
         for row in reader:
-            # Get contract value — try both English and French field names
-            val_str = (row.get("contractValue-valeurContrat") or
-                       row.get("contract_value") or
-                       row.get("valeurContrat") or "0")
+            # Contract value
+            val_str = ""
+            for f in ["contractValue-valeurContrat","totalValue-valeurTotale","contract_value"]:
+                if row.get(f):
+                    val_str = row[f]; break
             try:
-                amount_cad = float(str(val_str).replace(",","").replace("$","") or 0)
+                amount_cad = float(str(val_str).replace(",","").replace("$","").strip() or 0)
             except:
                 amount_cad = 0
             if amount_cad < min_cad:
                 continue
-            vendor  = (row.get("vendorName-nomFournisseur") or
-                       row.get("vendor_name") or "Unknown")
-            agency  = (row.get("referenceNumber-numeroReference") or
-                       row.get("owner_org_title") or "")
-            awarded = (row.get("contractDate-dateContrat") or
-                       row.get("contract_date") or "")[:10]
-            desc    = (row.get("description-descriptionDuContrat") or
-                       row.get("description") or "")[:200]
-            ref     = (row.get("referenceNumber-numeroReference") or
-                       row.get("reference_number") or str(hash(vendor+awarded)))
+            # Award date
+            awarded = ""
+            for f in ["publicationDate-datePublication","contractDate-dateContrat","contract_date"]:
+                if row.get(f):
+                    awarded = str(row[f])[:10]; break
+            if awarded and awarded < since:
+                continue
+            # Vendor
+            vendor = ""
+            for f in ["vendorName-nomFournisseur","vendor_name","supplierName-nomFournisseur"]:
+                if row.get(f):
+                    vendor = row[f]; break
+            if not vendor:
+                continue
+            # Description
+            desc = ""
+            for f in ["description-descriptionDuContrat","description","title-titre"]:
+                if row.get(f):
+                    desc = str(row[f])[:200]; break
+            # Reference
+            ref = ""
+            for f in ["referenceNumber-numeroReference","reference_number","solicitationNumber-numeroSollicitation"]:
+                if row.get(f):
+                    ref = row[f]; break
+            if not ref:
+                ref = str(hash(vendor+awarded))
             results.append({
-                "id":        ref,
-                "recipient": vendor,
-                "amount":    amount_cad,
-                "amount_usd":amount_cad * fx,
-                "currency":  "CAD",
-                "agency":    agency,
-                "desc":      desc,
-                "awarded":   awarded,
-                "expires":   "",
-                "location":  "Canada",
-                "country":   "Canada",
-                "source":    "CanadaBuys (Canada)",
+                "id":         ref,
+                "recipient":  vendor,
+                "amount":     amount_cad,
+                "amount_usd": amount_cad * fx,
+                "currency":   "CAD",
+                "agency":     row.get("ownerAcronym-acronymeProprietaire",""),
+                "desc":       desc,
+                "awarded":    awarded,
+                "expires":    "",
+                "location":   "Canada",
+                "country":    "Canada",
+                "source":     "CanadaBuys (Canada)",
             })
         return results
     except Exception as e:
@@ -450,7 +456,7 @@ def fetch_canada_awards():
         return []
 
 # =========================================================
-# FETCH ISRAEL — data.gov.il open data
+# FETCH ISRAEL
 # =========================================================
 
 def fetch_israel_awards():
@@ -458,40 +464,36 @@ def fetch_israel_awards():
         fx      = get_fx_rate("ILS")
         min_ils = MIN_AWARD_USD / fx
         since   = (datetime.now()-timedelta(hours=LOOKBACK_HOURS)).strftime("%Y-%m-%d")
-        params  = urllib.parse.urlencode({
-            "resource_id": "e3b90efa-d19d-4ae6-9b09-f2b05703d2a2",
-            "limit":       100,
-            "sort":        "AwardDate desc",
-        })
-        url = f"https://data.gov.il/api/3/action/datastore_search?{params}"
+        # OpenBudget Israel — open procurement API
+        url = (f"https://next.obudget.org/api/query?"
+               f"query=SELECT%20*%20FROM%20procurement_winner_detail"
+               f"%20WHERE%20start_date%3E%3D%27{since}%27"
+               f"%20ORDER%20BY%20volume%20DESC%20LIMIT%20100&num_rows=100")
         req = urllib.request.Request(url,
             headers={"User-Agent":"ContractBot/1.0","Accept":"application/json"})
         with urllib.request.urlopen(req, timeout=30) as r:
             data = json.loads(r.read())
         results = []
-        for a in data.get("result",{}).get("records",[]):
+        for a in data.get("rows", []):
             try:
-                amount_ils = float(str(a.get("Amount","0")).replace(",","") or 0)
+                amount_ils = float(a.get("volume") or 0)
             except:
                 amount_ils = 0
             if amount_ils < min_ils:
                 continue
-            awarded = str(a.get("AwardDate",""))[:10]
-            if awarded < since:
-                continue
             results.append({
-                "id":        str(a.get("_id","")),
-                "recipient": a.get("SuppliersNames","Unknown"),
-                "amount":    amount_ils,
-                "amount_usd":amount_ils * fx,
-                "currency":  "ILS",
-                "agency":    a.get("PublisherName",""),
-                "desc":      (a.get("Description") or "")[:200],
-                "awarded":   awarded,
-                "expires":   str(a.get("EndDate",""))[:10],
-                "location":  "Israel",
-                "country":   "Israel",
-                "source":    "data.gov.il (Israel)",
+                "id":         str(a.get("order_id","")),
+                "recipient":  a.get("supplier_name","Unknown"),
+                "amount":     amount_ils,
+                "amount_usd": amount_ils * fx,
+                "currency":   "ILS",
+                "agency":     a.get("purchasing_unit_name",""),
+                "desc":       (a.get("description") or "")[:200],
+                "awarded":    str(a.get("start_date",""))[:10],
+                "expires":    str(a.get("end_date",""))[:10],
+                "location":   "Israel",
+                "country":    "Israel",
+                "source":     "OpenBudget Israel",
             })
         return results
     except Exception as e:
@@ -507,7 +509,7 @@ def send_push(award, ticker, exchange, stock_currency, price, cap, amount_usd, i
     currency   = award.get("currency","USD")
     amount_loc = fmt_local(award.get("amount",0), currency)
     awarded    = award.get("awarded","Unknown")
-    expires    = award.get("expires","Unknown")
+    expires    = award.get("expires","")
     agency     = award.get("agency","")
     desc       = award.get("desc","")[:150]
     country    = award.get("country","")
@@ -523,7 +525,10 @@ def send_push(award, ticker, exchange, stock_currency, price, cap, amount_usd, i
         "CONTRACT",
         f"Value    : {amount_loc} ({fmt_usd(amount_usd)} USD)",
         f"Awarded  : {awarded}",
-        f"Expires  : {expires}",
+    ]
+    if expires:
+        lines.append(f"Expires  : {expires}")
+    lines += [
         f"Agency   : {agency}",
         f"Country  : {country}",
         f"What     : {desc}",
@@ -540,6 +545,7 @@ def send_push(award, ticker, exchange, stock_currency, price, cap, amount_usd, i
     lines += [f"Source   : {source}", f"Alert    : {alerted_at}"]
 
     body = "\n".join(lines)
+
     if country == "USA":
         link = f"https://www.usaspending.gov/award/{award_id}"
     elif country == "UK":
@@ -560,6 +566,27 @@ def send_push(award, ticker, exchange, stock_currency, price, cap, amount_usd, i
     )
     retry(lambda: urllib.request.urlopen(req, timeout=10).close())
     log.info(f"  Pushed: {title}")
+
+# =========================================================
+# TEST PUSH — sends one test notification on startup
+# =========================================================
+
+def send_test_push():
+    try:
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data="Contract Alert Bot is live and monitoring USA, UK, Canada and Israel.".encode(),
+            headers={
+                "Title":    "Contract Bot Started",
+                "Priority": "default",
+                "Tags":     "white_check_mark",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10).close()
+        log.info("Test push sent to phone")
+    except Exception as e:
+        log.warning(f"Test push failed: {e}")
 
 # =========================================================
 # MAIN CHECK
@@ -627,10 +654,16 @@ print(f"  Min award: {fmt_usd(MIN_AWARD_USD)}")
 print(f"  Lookback : {LOOKBACK_HOURS} hours per check")
 print(f"  Interval : every {CHECK_MINUTES} minutes")
 print(f"  ntfy     : ntfy.sh/{NTFY_TOPIC}")
-print(f"  Lookup   : Known list + SEC EDGAR live search")
 print("=" * 55)
 
+# Send test push so you know phone is connected
+send_test_push()
+
+# First check
 check()
+
+# Loop forever
 while True:
+    log.info(f"Sleeping {CHECK_MINUTES} minutes until next check...")
     time.sleep(CHECK_MINUTES * 60)
     check()
