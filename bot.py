@@ -441,8 +441,8 @@ def fetch_dod_awards():
                 except:
                     pass
 
-            # Only process if within lookback window
-            cutoff = (today - timedelta(hours=LOOKBACK_HOURS)).strftime("%Y-%m-%d")
+            # DoD posts once per day — always check today and yesterday
+            cutoff = (today - timedelta(days=2)).strftime("%Y-%m-%d")
             if used_date < cutoff:
                 continue
 
