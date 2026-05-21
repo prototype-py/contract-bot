@@ -38,8 +38,6 @@ log = logging.getLogger(__name__)
 
 # =========================================================
 # KEEP-ALIVE WEB SERVER
-# Railway requires a web process to stay alive
-# This runs a tiny HTTP server on port 8080
 # =========================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -49,7 +47,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         status = f"Contract Bot running. Last check: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         self.wfile.write(status.encode())
     def log_message(self, format, *args):
-        pass  # Suppress HTTP logs
+        pass
 
 def start_web_server():
     server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
@@ -253,7 +251,7 @@ def score_deal(amount_usd, market_cap, years, insider):
     reasons = []
 
     if not market_cap or market_cap <= 0:
-        return 0, "UNKNOWN", ["Market cap unavailable"]
+        return 25, "NOTABLE", ["Market cap unavailable — verify manually"]
 
     # Contract vs market cap (0-60 pts)
     pct = (amount_usd / market_cap) * 100
@@ -770,13 +768,10 @@ print(f"  Interval   : every {CHECK_MINUTES} minutes")
 print(f"  ntfy       : ntfy.sh/{NTFY_TOPIC}")
 print("=" * 55)
 
-# Start keep-alive web server on port 8080
 start_web_server()
 
-# Run bot in background thread
 bot_thread = threading.Thread(target=run_bot, daemon=True)
 bot_thread.start()
 
-# Keep main thread alive
 while True:
     time.sleep(60)
