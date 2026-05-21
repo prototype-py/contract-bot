@@ -4,8 +4,10 @@ import json
 import time
 import sqlite3
 import logging
+import threading
 import urllib.request
 import urllib.parse
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -18,12 +20,6 @@ MIN_AWARD_USD  = 5_000_000
 CHECK_MINUTES  = 60
 LOOKBACK_HOURS = 2
 DATABASE       = "contracts.db"
-
-# Minimum deal score to send alert (0 = send everything)
-# Score is contract value as % of market cap
-# 5  = contract is at least 5% of market cap  (good)
-# 10 = contract is at least 10% of market cap (very good)
-# 20 = contract is at least 20% of market cap (excellent)
 MIN_DEAL_SCORE = 5
 
 # =========================================================
@@ -39,6 +35,27 @@ logging.basicConfig(
     ]
 )
 log = logging.getLogger(__name__)
+
+# =========================================================
+# KEEP-ALIVE WEB SERVER
+# Railway requires a web process to stay alive
+# This runs a tiny HTTP server on port 8080
+# =========================================================
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        status = f"Contract Bot running. Last check: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        self.wfile.write(status.encode())
+    def log_message(self, format, *args):
+        pass  # Suppress HTTP logs
+
+def start_web_server():
+    server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    log.info("Health server running on port 8080")
 
 # =========================================================
 # KNOWN COMPANIES
@@ -209,12 +226,11 @@ def get_stock_info(ticker):
         req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
-        meta      = data["chart"]["result"][0]["meta"]
-        price     = meta.get("regularMarketPrice", 0)
-        cap       = meta.get("marketCap", 0)
-        curr      = meta.get("currency", "USD")
-        exch      = meta.get("exchangeName", "")
-        return price, cap, curr, exch
+        meta  = data["chart"]["result"][0]["meta"]
+        return (meta.get("regularMarketPrice", 0),
+                meta.get("marketCap", 0),
+                meta.get("currency", "USD"),
+                meta.get("exchangeName", ""))
     except:
         return None, None, None, None
 
@@ -222,77 +238,62 @@ def get_stock_info(ticker):
 # DEAL SCORING
 # =========================================================
 
-def score_deal(amount_usd, market_cap_usd, contract_years, insider):
-    """
-    Returns a score 0-100 and a rating label.
+def get_contract_years(awarded, expires):
+    try:
+        if not awarded or not expires:
+            return 1.0
+        start = datetime.strptime(awarded[:10], "%Y-%m-%d")
+        end   = datetime.strptime(expires[:10], "%Y-%m-%d")
+        return max((end - start).days / 365.25, 0.1)
+    except:
+        return 1.0
 
-    Key factors:
-    - Contract value as % of market cap (most important)
-    - Contract duration (multi-year = more revenue)
-    - Insider buying present (confirmation signal)
-    """
-    score = 0
+def score_deal(amount_usd, market_cap, years, insider):
+    score   = 0
     reasons = []
 
-    if not market_cap_usd or market_cap_usd <= 0:
-        return 0, "UNKNOWN", ["Could not determine market cap"]
+    if not market_cap or market_cap <= 0:
+        return 0, "UNKNOWN", ["Market cap unavailable"]
 
-    # ── Factor 1: Contract vs Market Cap (0-60 points) ──────
-    pct = (amount_usd / market_cap_usd) * 100
-
+    # Contract vs market cap (0-60 pts)
+    pct = (amount_usd / market_cap) * 100
     if pct >= 50:
-        score += 60
-        reasons.append(f"Contract is {pct:.0f}% of market cap — TRANSFORMATIVE")
+        score += 60; reasons.append(f"Contract is {pct:.0f}% of market cap — TRANSFORMATIVE")
     elif pct >= 25:
-        score += 50
-        reasons.append(f"Contract is {pct:.0f}% of market cap — EXCEPTIONAL")
+        score += 50; reasons.append(f"Contract is {pct:.0f}% of market cap — EXCEPTIONAL")
     elif pct >= 10:
-        score += 35
-        reasons.append(f"Contract is {pct:.0f}% of market cap — VERY STRONG")
+        score += 35; reasons.append(f"Contract is {pct:.0f}% of market cap — VERY STRONG")
     elif pct >= 5:
-        score += 20
-        reasons.append(f"Contract is {pct:.0f}% of market cap — SOLID")
+        score += 20; reasons.append(f"Contract is {pct:.0f}% of market cap — SOLID")
     elif pct >= 2:
-        score += 10
-        reasons.append(f"Contract is {pct:.0f}% of market cap — MODERATE")
+        score += 10; reasons.append(f"Contract is {pct:.1f}% of market cap — MODERATE")
     else:
-        score += 2
-        reasons.append(f"Contract is {pct:.1f}% of market cap — MINOR")
+        score += 2;  reasons.append(f"Contract is {pct:.1f}% of market cap — MINOR")
 
-    # ── Factor 2: Contract size in absolute terms (0-20 points) ──
+    # Absolute size (0-20 pts)
     if amount_usd >= 500_000_000:
-        score += 20
-        reasons.append("Mega contract $500M+")
+        score += 20; reasons.append("Mega contract $500M+")
     elif amount_usd >= 100_000_000:
-        score += 15
-        reasons.append("Large contract $100M+")
+        score += 15; reasons.append("Large contract $100M+")
     elif amount_usd >= 50_000_000:
-        score += 10
-        reasons.append("Significant contract $50M+")
+        score += 10; reasons.append("Significant contract $50M+")
     elif amount_usd >= 10_000_000:
-        score += 5
-        reasons.append("Notable contract $10M+")
+        score += 5;  reasons.append("Notable contract $10M+")
 
-    # ── Factor 3: Contract duration (0-10 points) ────────────
-    if contract_years >= 5:
-        score += 10
-        reasons.append(f"{contract_years:.0f} year contract — long term revenue secured")
-    elif contract_years >= 3:
-        score += 7
-        reasons.append(f"{contract_years:.0f} year contract — multi-year revenue")
-    elif contract_years >= 2:
-        score += 4
-        reasons.append(f"{contract_years:.0f} year contract")
-    elif contract_years >= 1:
-        score += 2
-        reasons.append(f"{contract_years:.0f} year contract")
+    # Duration (0-10 pts)
+    if years >= 5:
+        score += 10; reasons.append(f"{years:.0f} year contract — long term revenue secured")
+    elif years >= 3:
+        score += 7;  reasons.append(f"{years:.0f} year contract — multi-year revenue")
+    elif years >= 2:
+        score += 4;  reasons.append(f"{years:.0f} year contract")
+    elif years >= 1:
+        score += 2;  reasons.append(f"{years:.0f} year contract")
 
-    # ── Factor 4: Insider activity (0-10 points) ─────────────
+    # Insider activity (0-10 pts)
     if insider:
-        score += 10
-        reasons.append("Insider Form 4 filing detected — strong confirmation")
+        score += 10; reasons.append("Insider Form 4 filing in last 30 days")
 
-    # ── Rating label ─────────────────────────────────────────
     score = min(score, 100)
     if score >= 70:   rating = "STRONG BUY"
     elif score >= 50: rating = "HIGH VALUE"
@@ -301,18 +302,6 @@ def score_deal(amount_usd, market_cap_usd, contract_years, insider):
     else:             rating = "LOW IMPACT"
 
     return score, rating, reasons
-
-def get_contract_years(awarded, expires):
-    """Calculate contract duration in years."""
-    try:
-        if not awarded or not expires:
-            return 1.0
-        start = datetime.strptime(awarded[:10], "%Y-%m-%d")
-        end   = datetime.strptime(expires[:10], "%Y-%m-%d")
-        years = (end - start).days / 365.25
-        return max(years, 0.1)
-    except:
-        return 1.0
 
 # =========================================================
 # COMPANY LOOKUP
@@ -337,7 +326,7 @@ def search_edgar(company_name):
         if not matches:
             return None, None
         ticker = matches[0]
-        price, cap, curr, exch = get_stock_info(ticker)
+        _, cap, _, exch = get_stock_info(ticker)
         if cap and cap > 0:
             log.info(f"  EDGAR found: {company_name} → ${ticker} ({exch})")
             return ticker, exch
@@ -501,36 +490,27 @@ def fetch_canada_awards():
         for row in reader:
             val_str = ""
             for f in ["contractValue-valeurContrat","totalValue-valeurTotale","contract_value"]:
-                if row.get(f):
-                    val_str = row[f]; break
+                if row.get(f): val_str = row[f]; break
             try:
                 amount_cad = float(str(val_str).replace(",","").replace("$","").strip() or 0)
             except:
                 amount_cad = 0
-            if amount_cad < min_cad:
-                continue
+            if amount_cad < min_cad: continue
             awarded = ""
             for f in ["publicationDate-datePublication","contractDate-dateContrat","contract_date"]:
-                if row.get(f):
-                    awarded = str(row[f])[:10]; break
-            if awarded and awarded < since:
-                continue
+                if row.get(f): awarded = str(row[f])[:10]; break
+            if awarded and awarded < since: continue
             vendor = ""
             for f in ["vendorName-nomFournisseur","vendor_name","supplierName-nomFournisseur"]:
-                if row.get(f):
-                    vendor = row[f]; break
-            if not vendor:
-                continue
+                if row.get(f): vendor = row[f]; break
+            if not vendor: continue
             desc = ""
             for f in ["description-descriptionDuContrat","description","title-titre"]:
-                if row.get(f):
-                    desc = str(row[f])[:200]; break
+                if row.get(f): desc = str(row[f])[:200]; break
             ref = ""
             for f in ["referenceNumber-numeroReference","reference_number"]:
-                if row.get(f):
-                    ref = row[f]; break
-            if not ref:
-                ref = str(hash(vendor+awarded))
+                if row.get(f): ref = row[f]; break
+            if not ref: ref = str(hash(vendor+awarded))
             results.append({
                 "id":         ref,
                 "recipient":  vendor,
@@ -573,8 +553,7 @@ def fetch_israel_awards():
                 amount_ils = float(a.get("volume") or 0)
             except:
                 amount_ils = 0
-            if amount_ils < min_ils:
-                continue
+            if amount_ils < min_ils: continue
             results.append({
                 "id":         str(a.get("order_id","")),
                 "recipient":  a.get("supplier_name","Unknown"),
@@ -613,21 +592,15 @@ def send_push(award, ticker, exchange, stock_currency, price,
     alerted_at = datetime.now().strftime("%b %d %Y at %I:%M %p")
     amt_val    = float(amount_usd or 0)
 
-    # Priority based on deal score not just size
     if deal_score >= 70:   priority = "urgent"
     elif deal_score >= 40: priority = "high"
     else:                  priority = "default"
 
-    title = f"[{rating}] ${ticker} | {recipient}" if ticker else f"[{rating}] {recipient}"
-
-    # Market cap formatted
+    title  = f"[{rating}] ${ticker} | {recipient}" if ticker else f"[{rating}] {recipient}"
     cap_str = fmt_usd(cap_raw) if cap_raw else "Unknown"
-
-    # Contract as % of market cap
     pct_str = ""
     if cap_raw and cap_raw > 0:
-        pct = (amt_val / cap_raw) * 100
-        pct_str = f"{pct:.1f}% of market cap"
+        pct_str = f"{(amt_val/cap_raw)*100:.1f}% of market cap"
 
     lines = [
         f"DEAL SCORE: {deal_score}/100 — {rating}",
@@ -650,9 +623,9 @@ def send_push(award, ticker, exchange, stock_currency, price,
         f"Exchange : {exchange}",
         f"Ticker   : {ticker}",
     ]
-    if price:        lines.append(f"Price    : {price:.2f} {stock_currency or ''}")
-    if cap_str:      lines.append(f"Mkt Cap  : {cap_str}")
-    if pct_str:      lines.append(f"Impact   : {pct_str}")
+    if price:   lines.append(f"Price    : {price:.2f} {stock_currency or ''}")
+    if cap_str: lines.append(f"Mkt Cap  : {cap_str}")
+    if pct_str: lines.append(f"Impact   : {pct_str}")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append("WHY THIS MATTERS")
     for r in reasons:
@@ -693,7 +666,7 @@ def send_test_push():
     try:
         req = urllib.request.Request(
             f"https://ntfy.sh/{NTFY_TOPIC}",
-            data="Contract Alert Bot is live. Monitoring USA, UK, Canada and Israel for deals.".encode(),
+            data="Contract Alert Bot is live. Monitoring USA, UK, Canada and Israel.".encode(),
             headers={
                 "Title":    "Contract Bot Started",
                 "Priority": "default",
@@ -741,25 +714,19 @@ def check():
             continue
 
         amount_usd = award.get("amount_usd", award["amount"])
-
-        # Get stock info
         price, cap_raw, stock_currency, _ = get_stock_info(ticker)
-
-        # Get insider activity
         insider = None
         if award.get("country") == "USA":
             insider = get_insider_activity(ticker)
 
-        # Score the deal
         years = get_contract_years(award.get("awarded",""), award.get("expires",""))
         deal_score, rating, reasons = score_deal(amount_usd, cap_raw, years, insider)
 
         log.info(f"NEW ★ [{award['country']}] {award['recipient']} | "
                  f"{fmt_usd(amount_usd)} | ${ticker} | Score: {deal_score}/100 [{rating}]")
 
-        # Only alert if deal score meets minimum
         if deal_score < MIN_DEAL_SCORE:
-            log.info(f"  Skipped — deal score {deal_score} below minimum {MIN_DEAL_SCORE}")
+            log.info(f"  Skipped — score {deal_score} below minimum {MIN_DEAL_SCORE}")
             mark_seen(uid, award, amount_usd, award["country"], ticker, exchange, deal_score)
             continue
 
@@ -773,6 +740,20 @@ def check():
         new_count += 1
 
     log.info(f"Done — {new_count} new alerts sent")
+
+# =========================================================
+# MAIN LOOP
+# =========================================================
+
+def run_bot():
+    send_test_push()
+    while True:
+        try:
+            check()
+        except Exception as e:
+            log.error(f"Check error: {e}")
+        log.info(f"Sleeping {CHECK_MINUTES} minutes until next check...")
+        time.sleep(CHECK_MINUTES * 60)
 
 # =========================================================
 # START
@@ -789,10 +770,13 @@ print(f"  Interval   : every {CHECK_MINUTES} minutes")
 print(f"  ntfy       : ntfy.sh/{NTFY_TOPIC}")
 print("=" * 55)
 
-send_test_push()
-check()
+# Start keep-alive web server on port 8080
+start_web_server()
 
+# Run bot in background thread
+bot_thread = threading.Thread(target=run_bot, daemon=True)
+bot_thread.start()
+
+# Keep main thread alive
 while True:
-    log.info(f"Sleeping {CHECK_MINUTES} minutes until next check...")
-    time.sleep(CHECK_MINUTES * 60)
-    check()
+    time.sleep(60)
