@@ -107,17 +107,14 @@ KNOWN = {
     "Amazon":              {"ticker": "AMZN",   "exchange": "NASDAQ", "currency": "USD"},
     "Google":              {"ticker": "GOOGL",  "exchange": "NASDAQ", "currency": "USD"},
     "Alphabet":            {"ticker": "GOOGL",  "exchange": "NASDAQ", "currency": "USD"},
-    "Peraton":             {"ticker": "LDOS",   "exchange": "NYSE",   "currency": "USD"},
     "Vectrus":             {"ticker": "VEC",    "exchange": "NYSE",   "currency": "USD"},
     "Amentum":             {"ticker": "AMTM",   "exchange": "NYSE",   "currency": "USD"},
-    "Leidos":              {"ticker": "LDOS",   "exchange": "NYSE",   "currency": "USD"},
-    "Science Applications":{"ticker": "SAIC",   "exchange": "NYSE",   "currency": "USD"},
     "Pratt and Whitney":   {"ticker": "RTX",    "exchange": "NYSE",   "currency": "USD"},
     "Pratt & Whitney":     {"ticker": "RTX",    "exchange": "NYSE",   "currency": "USD"},
     "Collins Aerospace":   {"ticker": "RTX",    "exchange": "NYSE",   "currency": "USD"},
     "Sikorsky":            {"ticker": "LMT",    "exchange": "NYSE",   "currency": "USD"},
-    "Rolls-Royce":         {"ticker": "RR.L",   "exchange": "LSE",    "currency": "GBP"},
     "BAE Systems":         {"ticker": "BA.L",   "exchange": "LSE",    "currency": "GBP"},
+    "Rolls-Royce":         {"ticker": "RR.L",   "exchange": "LSE",    "currency": "GBP"},
     "QinetiQ":             {"ticker": "QQ.L",   "exchange": "LSE",    "currency": "GBP"},
     "Babcock":             {"ticker": "BAB.L",  "exchange": "LSE",    "currency": "GBP"},
     "Serco":               {"ticker": "SRP.L",  "exchange": "LSE",    "currency": "GBP"},
@@ -135,10 +132,7 @@ KNOWN = {
     "Check Point":         {"ticker": "CHKP",   "exchange": "NASDAQ", "currency": "USD"},
     "NICE Systems":        {"ticker": "NICE",   "exchange": "NASDAQ", "currency": "USD"},
     "Radware":             {"ticker": "RDWR",   "exchange": "NASDAQ", "currency": "USD"},
-    "Bollinger":           {"ticker": "BOLG",   "exchange": "NYSE",   "currency": "USD"},
-    "Johns Hopkins":       {"ticker": "JHU",    "exchange": "NYSE",   "currency": "USD"},
-    "Innovative Defense":  {"ticker": "IDT",    "exchange": "NASDAQ", "currency": "USD"},
-    "Core Services":       {"ticker": "CSGP",   "exchange": "NASDAQ", "currency": "USD"},
+    "Anduril":             {"ticker": "ANDR",   "exchange": "NASDAQ", "currency": "USD"},
 }
 
 # =========================================================
@@ -348,7 +342,107 @@ def get_insider_activity(ticker):
         return None
 
 # =========================================================
-# FETCH USA — USASpending.gov (1-2 day delay but comprehensive)
+# FETCH DoD — globalsecurity.org mirrors war.gov daily
+# URL pattern: /military/library/news/YYYY/MM/MM-DD_index.htm
+# Then finds dod-contracts link on that daily index page
+# =========================================================
+
+def fetch_dod_awards():
+    try:
+        today   = datetime.now()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        results   = []
+        seen_uids = set()
+
+        # Check today and yesterday
+        for dt in [today, today - timedelta(days=1)]:
+            year  = dt.strftime("%Y")
+            month = dt.strftime("%m")
+            day   = dt.strftime("%d")
+            used_date = dt.strftime("%Y-%m-%d")
+
+            # Step 1 — fetch daily index page
+            daily_url = f"https://www.globalsecurity.org/military/library/news/{year}/{month}/{month}-{day}_index.htm"
+            try:
+                req = urllib.request.Request(daily_url, headers=headers)
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    daily_html = r.read().decode("utf-8", errors="ignore")
+            except Exception as e:
+                log.debug(f"DoD: daily index not found for {used_date}: {e}")
+                continue
+
+            # Step 2 — find dod-contracts link on daily page
+            contract_links = re.findall(
+                r'href="(/military/library/news/\d{4}/\d{2}/dod-contracts_[^"]+\.htm)"',
+                daily_html
+            )
+            if not contract_links:
+                log.debug(f"DoD: no contract link on {used_date} daily page yet")
+                continue
+
+            # Step 3 — fetch the contract page
+            article_url = f"https://www.globalsecurity.org{contract_links[0]}"
+            try:
+                req2 = urllib.request.Request(article_url, headers=headers)
+                with urllib.request.urlopen(req2, timeout=20) as r2:
+                    article = r2.read().decode("utf-8", errors="ignore")
+            except Exception as e:
+                log.debug(f"DoD: could not fetch contract page: {e}")
+                continue
+
+            log.info(f"DoD: parsing contracts for {used_date}")
+
+            # Step 4 — parse awards
+            award_pattern = re.compile(
+                r'([A-Z][A-Za-z0-9 &.,\-]{2,70}?),\*?\s+[A-Z][a-zA-Z .]+,\s+[A-Z][a-zA-Z .]+,\s+(?:was awarded|is awarded|are awarded|is being awarded)\s+(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
+                re.IGNORECASE
+            )
+            for match in award_pattern.finditer(article):
+                company = match.group(1).strip().rstrip(",").strip()
+                if len(company) < 3 or company[0].islower():
+                    continue
+                amt_str = match.group(2).replace(",", "")
+                try:
+                    amount = float(amt_str)
+                    if amount < 1_000:
+                        amount *= 1_000_000
+                except:
+                    continue
+                if amount < MIN_AWARD_USD:
+                    continue
+                uid = f"DOD:{company[:30]}:{amount:.0f}:{used_date}"
+                if uid in seen_uids:
+                    continue
+                seen_uids.add(uid)
+                end  = min(len(article), match.end() + 400)
+                desc = re.sub(r'<[^>]+>', '', article[match.end():end]).strip()[:200]
+                results.append({
+                    "id":         uid,
+                    "recipient":  company,
+                    "amount":     amount,
+                    "amount_usd": amount,
+                    "currency":   "USD",
+                    "agency":     "Department of Defense",
+                    "desc":       desc,
+                    "awarded":    used_date,
+                    "expires":    "",
+                    "location":   "USA",
+                    "country":    "USA",
+                    "source":     "war.gov via globalsecurity.org",
+                })
+
+        log.info(f"DoD: parsed {len(results)} contracts total")
+        return results
+
+    except Exception as e:
+        log.warning(f"DoD fetch failed: {e}")
+        return []
+
+# =========================================================
+# FETCH USA — USASpending.gov
 # =========================================================
 
 def fetch_us_awards():
@@ -389,110 +483,6 @@ def fetch_us_awards():
             "country": "USA", "source": "USASpending.gov",
         })
     return results
-
-# =========================================================
-# FETCH DoD — globalsecurity.org mirrors war.gov daily
-# Fetches index page to find latest contract link then parses it
-# =========================================================
-
-def fetch_dod_awards():
-    try:
-        today    = datetime.now()
-        month_yr = today.strftime("%Y/%m")
-        headers  = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-
-        # Step 1 — get index page for this month to find latest contract link
-        index_url = f"https://www.globalsecurity.org/military/library/news/{month_yr}/index.html"
-        req = urllib.request.Request(index_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as r:
-            index_html = r.read().decode("utf-8", errors="ignore")
-
-        # Find all contract links
-        contract_links = re.findall(
-            r'href="(/military/library/news/\d{4}/\d{2}/dod-contracts_[^"]+\.htm)"',
-            index_html
-        )
-        if not contract_links:
-            log.warning("DoD: no contract links found in index")
-            return []
-
-        # Try the most recent links (last 2)
-        results = []
-        seen_uids = set()
-        for link in contract_links[-2:]:
-            article_url = f"https://www.globalsecurity.org{link}"
-            try:
-                req2 = urllib.request.Request(article_url, headers=headers)
-                with urllib.request.urlopen(req2, timeout=20) as r2:
-                    article = r2.read().decode("utf-8", errors="ignore")
-            except Exception as e:
-                log.debug(f"DoD: could not fetch {article_url}: {e}")
-                continue
-
-            # Extract date from article title
-            date_match = re.search(r'Contracts for ([A-Z][a-z]+ \d+, \d{4})', article)
-            used_date = today.strftime("%Y-%m-%d")
-            if date_match:
-                try:
-                    used_date = datetime.strptime(date_match.group(1), "%B %d, %Y").strftime("%Y-%m-%d")
-                except:
-                    pass
-
-            # DoD posts once per day — always check today and yesterday
-            cutoff = (today - timedelta(days=2)).strftime("%Y-%m-%d")
-            if used_date < cutoff:
-                continue
-
-            log.info(f"DoD: parsing contracts for {used_date}")
-
-            # Parse awards — pattern: "Company, Location, is awarded a $X"
-            award_pattern = re.compile(
-                r'([A-Z][A-Za-z0-9 &.,\-]{3,80}?),\*?\s+[A-Z][a-zA-Z ]+,\s+[A-Z][a-zA-Z ]+,\s+(?:was awarded|is awarded|are awarded)\s+(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
-                re.IGNORECASE
-            )
-            for match in award_pattern.finditer(article):
-                company = match.group(1).strip()
-                amt_str = match.group(2).replace(",","")
-                try:
-                    amount = float(amt_str)
-                    # Dollar amounts in these announcements are full dollars
-                    if amount < 1_000:
-                        amount *= 1_000_000
-                except:
-                    continue
-                if amount < MIN_AWARD_USD:
-                    continue
-                uid = f"DOD:{company[:30]}:{amount:.0f}:{used_date}"
-                if uid in seen_uids:
-                    continue
-                seen_uids.add(uid)
-                # Get description context
-                end  = min(len(article), match.end() + 400)
-                desc = re.sub(r'<[^>]+>', '', article[match.end():end]).strip()[:200]
-                results.append({
-                    "id":         uid,
-                    "recipient":  company,
-                    "amount":     amount,
-                    "amount_usd": amount,
-                    "currency":   "USD",
-                    "agency":     "Department of Defense",
-                    "desc":       desc,
-                    "awarded":    used_date,
-                    "expires":    "",
-                    "location":   "USA",
-                    "country":    "USA",
-                    "source":     "war.gov via globalsecurity.org",
-                })
-
-        log.info(f"DoD: parsed {len(results)} contracts total")
-        return results
-
-    except Exception as e:
-        log.warning(f"DoD fetch failed: {e}")
-        return []
 
 # =========================================================
 # FETCH UK
@@ -683,7 +673,7 @@ def send_test_push():
     try:
         req = urllib.request.Request(
             f"https://ntfy.sh/{NTFY_TOPIC}",
-            data="Contract Bot live. Monitoring USA (real-time DoD + USASpending), UK, Canada, Israel.".encode(),
+            data="Contract Bot live. Monitoring USA (DoD real-time + USASpending), UK, Canada, Israel.".encode(),
             headers={"Title":"Contract Bot Started","Priority":"default","Tags":"white_check_mark"},
             method="POST",
         )
@@ -699,61 +689,47 @@ def send_test_push():
 def check():
     log.info("─" * 55)
     log.info(f"Checking all markets — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
     all_awards = []
-    sources = [
-        ("DoD/war.gov",  fetch_dod_awards),
-        ("USA",          fetch_us_awards),
-        ("UK",           fetch_uk_awards),
-        ("Canada",       fetch_canada_awards),
-        ("Israel",       fetch_israel_awards),
-    ]
-    for name, fn in sources:
+    for name, fn in [("DoD/war.gov", fetch_dod_awards),
+                     ("USA",         fetch_us_awards),
+                     ("UK",          fetch_uk_awards),
+                     ("Canada",      fetch_canada_awards),
+                     ("Israel",      fetch_israel_awards)]:
         try:
             awards = fn()
             log.info(f"{name}: {len(awards)} contracts fetched")
             all_awards.extend(awards)
         except Exception as e:
             log.error(f"{name} fetch failed: {e}")
-
     log.info(f"Total fetched: {len(all_awards)}")
-
     new_count = 0
     for award in all_awards:
         uid = f"{award['country']}:{award['id']}:{award['amount']}"
         if already_seen(uid): continue
-
         ticker, exchange, currency = find_company(award["recipient"])
         if not ticker:
             mark_seen(uid, award, award.get("amount_usd",0), award["country"], "", "", 0)
             continue
-
         amount_usd = award.get("amount_usd", award["amount"])
         price, cap_raw, stock_currency, _ = get_stock_info(ticker)
         insider = None
         if award.get("country") == "USA":
             insider = get_insider_activity(ticker)
-
         years = get_contract_years(award.get("awarded",""), award.get("expires",""))
         deal_score, rating, reasons = score_deal(amount_usd, cap_raw, years, insider)
-
         log.info(f"NEW ★ [{award['country']}] {award['recipient']} | "
                  f"{fmt_usd(amount_usd)} | ${ticker} | Score: {deal_score}/100 [{rating}]")
-
         if deal_score < MIN_DEAL_SCORE:
             log.info(f"  Skipped — score {deal_score} below minimum {MIN_DEAL_SCORE}")
             mark_seen(uid, award, amount_usd, award["country"], ticker, exchange, deal_score)
             continue
-
         try:
             send_push(award, ticker, exchange, stock_currency, price,
                       cap_raw, amount_usd, insider, deal_score, rating, reasons)
         except Exception as e:
             log.error(f"Push failed: {e}")
-
         mark_seen(uid, award, amount_usd, award["country"], ticker, exchange, deal_score)
         new_count += 1
-
     log.info(f"Done — {new_count} new alerts sent")
 
 # =========================================================
