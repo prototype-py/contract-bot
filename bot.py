@@ -391,67 +391,69 @@ def fetch_us_awards():
     return results
 
 # =========================================================
-# FETCH DoD — war.gov (REAL TIME — posted at 5pm Eastern daily)
+# FETCH DoD — globalsecurity.org mirrors war.gov daily
+# Fully open, no auth, updates same day as war.gov
 # =========================================================
 
 def fetch_dod_awards():
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-        # war.gov daily contract page
-        url = f"https://www.war.gov/News/Contracts/"
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; ContractBot/1.0)",
-            "Accept": "text/html"
-        })
-        with urllib.request.urlopen(req, timeout=30) as r:
-            html = r.read().decode("utf-8", errors="ignore")
-
-        # Find today's contract link
-        date_str = datetime.now().strftime("%B %-d, %Y").replace(" 0", " ")
-        pattern  = r'href="(/News/Contracts/Contract/Article/[^"]+)"'
-        links    = re.findall(pattern, html)
-        if not links:
-            return []
-
-        # Fetch the most recent contract page
-        article_url = f"https://www.war.gov{links[0]}"
-        req2 = urllib.request.Request(article_url, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; ContractBot/1.0)"
-        })
-        with urllib.request.urlopen(req2, timeout=30) as r2:
-            article = r2.read().decode("utf-8", errors="ignore")
-
-        results = []
-        # Parse contract blocks — each company + amount
-        # Pattern: Company name, Location, is awarded a $X,XXX,XXX contract
-        award_pattern = re.compile(
-            r'([A-Z][^,\n]{3,80}),\*?\s+([^,\n]+),\s+(?:was awarded|is awarded|are awarded)\s+(?:a\s+)?\$([0-9,]+(?:\.[0-9]+)?)\s*(?:million|billion)?',
-            re.IGNORECASE
-        )
-
-        # Also match: "is awarded a $X contract"
-        for match in award_pattern.finditer(article):
-            company  = match.group(1).strip()
-            location = match.group(2).strip()
-            amt_str  = match.group(3).replace(",","")
+        today     = datetime.now().strftime("%Y-%m-%d")
+        # Try today first, then yesterday as fallback
+        dates_to_try = [
+            datetime.now(),
+            datetime.now() - timedelta(days=1),
+        ]
+        article = ""
+        used_date = today
+        for dt in dates_to_try:
+            month = dt.strftime("%B").lower()[:3]
+            day   = dt.day
+            year  = dt.year
+            url   = f"https://www.globalsecurity.org/military/library/news/{year}/{month}/dod-contracts_{dt.strftime('%m%d%Y')}.htm"
             try:
-                amount = float(amt_str)
-                # Handle if amount is in millions/billions
-                context = article[match.start():match.start()+200].lower()
-                if "billion" in context:
-                    amount *= 1_000_000_000
-                elif "million" in context:
-                    amount *= 1_000_000
-                # If amount looks like it's already in dollars
-                if amount < 1000:
-                    amount *= 1_000_000
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "text/html,application/xhtml+xml",
+                })
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    article = r.read().decode("utf-8", errors="ignore")
+                used_date = dt.strftime("%Y-%m-%d")
+                log.info(f"DoD: fetched contracts for {used_date}")
+                break
             except:
                 continue
 
+        if not article:
+            return []
+
+        results = []
+        # Match: "Company Name, City, State, is awarded a $XXX,XXX,XXX contract"
+        award_pattern = re.compile(
+            r'([A-Z][A-Za-z0-9&\.\-\s,]{5,100?}?)(?:,\*?|\*?)\s+(?:is awarded|was awarded|are awarded)\s+(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
+            re.IGNORECASE
+        )
+        for match in award_pattern.finditer(article):
+            company = match.group(1).strip().rstrip(",").strip()
+            # Clean up company name
+            company = re.sub(r',\s*[A-Z][a-z]+,?\s*[A-Z]{2}$', '', company).strip()
+            if len(company) < 3 or len(company) > 80:
+                continue
+            amt_str = match.group(2).replace(",","")
+            try:
+                amount = float(amt_str)
+                if amount < 1000:
+                    amount *= 1_000_000
+                elif amount < 1_000_000:
+                    amount *= 1_000
+            except:
+                continue
             if amount < MIN_AWARD_USD:
                 continue
-
-            uid = f"DOD:{company[:30]}:{amount:.0f}:{today}"
+            # Get context around match for description
+            start = max(0, match.start() - 50)
+            end   = min(len(article), match.end() + 400)
+            desc  = re.sub(r'<[^>]+>', '', article[start:end]).strip()[:200]
+            uid   = f"DOD:{company[:30]}:{amount:.0f}:{used_date}"
             results.append({
                 "id":         uid,
                 "recipient":  company,
@@ -459,19 +461,17 @@ def fetch_dod_awards():
                 "amount_usd": amount,
                 "currency":   "USD",
                 "agency":     "Department of Defense",
-                "desc":       article[match.start():match.start()+300].strip()[:200],
-                "awarded":    today,
+                "desc":       desc,
+                "awarded":    used_date,
                 "expires":    "",
-                "location":   location,
+                "location":   "USA",
                 "country":    "USA",
-                "source":     "war.gov (DoD — Real Time)",
+                "source":     "war.gov via globalsecurity.org (Real Time)",
             })
-
-        log.info(f"DoD (war.gov): parsed {len(results)} contracts")
+        log.info(f"DoD: parsed {len(results)} contracts from {used_date}")
         return results
-
     except Exception as e:
-        log.warning(f"DoD (war.gov) fetch failed: {e}")
+        log.warning(f"DoD fetch failed: {e}")
         return []
 
 # =========================================================
