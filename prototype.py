@@ -11,10 +11,11 @@ from pathlib import Path
 # SETTINGS
 # =========================================================
 
-NTFY_TOPIC    = "my-contract-alerts"
-MIN_AWARD_USD = 5_000_000
-CHECK_MINUTES = 60
-DATABASE      = "contracts.db"
+NTFY_TOPIC     = "my-contract-alerts"
+MIN_AWARD_USD  = 5_000_000
+CHECK_MINUTES  = 60
+LOOKBACK_HOURS = 2
+DATABASE       = "contracts.db"
 
 # =========================================================
 # LOGGING
@@ -31,11 +32,11 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # =========================================================
-# COMPANY DATABASE
+# KNOWN COMPANIES — fast lookup first
+# If not found here we fall back to SEC EDGAR live search
 # =========================================================
 
-COMPANIES = {
-    # USA
+KNOWN = {
     "Booz Allen":          {"ticker": "BAH",    "exchange": "NYSE",   "currency": "USD"},
     "Leidos":              {"ticker": "LDOS",   "exchange": "NYSE",   "currency": "USD"},
     "SAIC":                {"ticker": "SAIC",   "exchange": "NYSE",   "currency": "USD"},
@@ -72,21 +73,16 @@ COMPANIES = {
     "VSE Corporation":     {"ticker": "VSEC",   "exchange": "NASDAQ", "currency": "USD"},
     "DXC":                 {"ticker": "DXC",    "exchange": "NYSE",   "currency": "USD"},
     "IBM":                 {"ticker": "IBM",    "exchange": "NYSE",   "currency": "USD"},
-    # UK
     "BAE Systems":         {"ticker": "BA.",    "exchange": "LSE",    "currency": "GBP"},
     "Rolls-Royce":         {"ticker": "RR.",    "exchange": "LSE",    "currency": "GBP"},
     "QinetiQ":             {"ticker": "QQ.",    "exchange": "LSE",    "currency": "GBP"},
     "Babcock":             {"ticker": "BAB",    "exchange": "LSE",    "currency": "GBP"},
     "Serco":               {"ticker": "SRP",    "exchange": "LSE",    "currency": "GBP"},
-    "Capita":              {"ticker": "CPI",    "exchange": "LSE",    "currency": "GBP"},
-    "Meggitt":             {"ticker": "MGGT",   "exchange": "LSE",    "currency": "GBP"},
-    # Canada
     "CAE":                 {"ticker": "CAE",    "exchange": "TSX",    "currency": "CAD"},
     "MDA":                 {"ticker": "MDA",    "exchange": "TSX",    "currency": "CAD"},
     "Magellan Aerospace":  {"ticker": "MAL",    "exchange": "TSX",    "currency": "CAD"},
     "Heroux-Devtek":       {"ticker": "HRX",    "exchange": "TSX",    "currency": "CAD"},
     "Calian":              {"ticker": "CGY",    "exchange": "TSX",    "currency": "CAD"},
-    # Israel
     "Elbit Systems":       {"ticker": "ESLT",   "exchange": "NASDAQ", "currency": "USD"},
     "CyberArk":            {"ticker": "CYBR",   "exchange": "NASDAQ", "currency": "USD"},
     "Check Point":         {"ticker": "CHKP",   "exchange": "NASDAQ", "currency": "USD"},
@@ -102,14 +98,23 @@ def init_db():
     db = sqlite3.connect(DATABASE, check_same_thread=False)
     db.execute("""
         CREATE TABLE IF NOT EXISTS seen_awards (
-            uid         TEXT PRIMARY KEY,
-            recipient   TEXT,
-            amount_usd  REAL,
-            agency      TEXT,
-            country     TEXT,
-            ticker      TEXT,
-            exchange    TEXT,
-            seen_at     TEXT
+            uid        TEXT PRIMARY KEY,
+            recipient  TEXT,
+            amount_usd REAL,
+            agency     TEXT,
+            country    TEXT,
+            ticker     TEXT,
+            exchange   TEXT,
+            seen_at    TEXT
+        )
+    """)
+    # Cache EDGAR lookups so we don't repeat them
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS ticker_cache (
+            name       TEXT PRIMARY KEY,
+            ticker     TEXT,
+            exchange   TEXT,
+            found_at   TEXT
         )
     """)
     db.commit()
@@ -137,6 +142,19 @@ def mark_seen(uid, award, amount_usd, country, ticker, exchange):
         exchange,
         datetime.now().isoformat(),
     ))
+    DB.commit()
+
+def get_cached_ticker(name):
+    row = DB.execute(
+        "SELECT ticker, exchange FROM ticker_cache WHERE name=?", (name,)
+    ).fetchone()
+    return (row[0], row[1]) if row else None
+
+def cache_ticker(name, ticker, exchange):
+    DB.execute("""
+        INSERT OR REPLACE INTO ticker_cache (name, ticker, exchange, found_at)
+        VALUES (?, ?, ?, ?)
+    """, (name, ticker, exchange, datetime.now().isoformat()))
     DB.commit()
 
 # =========================================================
@@ -185,9 +203,9 @@ def get_fx_rate(currency):
 def get_stock_info(ticker, exchange):
     try:
         yf_ticker = ticker
-        if exchange == "LSE":   yf_ticker = ticker.rstrip(".") + ".L"
-        elif exchange == "TSX": yf_ticker = ticker + ".TO"
-        elif exchange == "TASE":yf_ticker = ticker + ".TA"
+        if exchange == "LSE":    yf_ticker = ticker.rstrip(".") + ".L"
+        elif exchange == "TSX":  yf_ticker = ticker + ".TO"
+        elif exchange == "TASE": yf_ticker = ticker + ".TA"
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_ticker}?interval=1d&range=1d"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -200,12 +218,93 @@ def get_stock_info(ticker, exchange):
     except:
         return None, None, None
 
+# =========================================================
+# COMPANY LOOKUP
+# Step 1 — check known list (instant)
+# Step 2 — check cache from previous runs (instant)
+# Step 3 — search SEC EDGAR live (2-3 seconds)
+# Step 4 — verify ticker exists on Yahoo Finance
+# =========================================================
+
+def search_edgar(company_name):
+    """Search SEC EDGAR full-text search for company ticker."""
+    try:
+        # Clean up the name — remove common suffixes that confuse the search
+        clean = company_name
+        for suffix in [" LLC", " Inc", " Corp", " Ltd", " LP",
+                       " LLP", " Co", " Group", ",", "."]:
+            clean = clean.replace(suffix, "").strip()
+
+        # Search EDGAR company search
+        params = urllib.parse.urlencode({"company": clean, "type": "", "dateb": "",
+                                         "owner": "include", "count": "5",
+                                         "search_text": "", "action": "getcompany"})
+        url = f"https://www.sec.gov/cgi-bin/browse-edgar?{params}&output=atom"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "contractbot@gmail.com"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            content = r.read().decode("utf-8")
+
+        # Parse ticker from response
+        import re
+        # Look for ticker in the atom feed
+        matches = re.findall(r'\(([A-Z]{1,5})\)', content)
+        if not matches:
+            return None, None
+
+        ticker = matches[0]
+
+        # Verify this ticker actually exists on Yahoo Finance
+        url2 = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
+        req2 = urllib.request.Request(url2, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req2, timeout=10) as r2:
+            data = json.loads(r2.read())
+        result = data["chart"]["result"][0]
+        exchange = result["meta"].get("exchangeName", "NASDAQ")
+        market_cap = result["meta"].get("marketCap", 0)
+
+        # Only return if it has a market cap (i.e. actually publicly traded)
+        if market_cap and market_cap > 0:
+            log.info(f"  EDGAR found: {company_name} → ${ticker} on {exchange} (MCap: {fmt_usd(market_cap)})")
+            return ticker, exchange
+
+        return None, None
+
+    except Exception as e:
+        log.debug(f"EDGAR lookup failed for {company_name}: {e}")
+        return None, None
+
 def find_company(name):
+    """
+    Find ticker for a company name.
+    Returns (ticker, exchange, currency) or (None, None, None)
+    """
     name_lower = name.lower()
-    for company, info in COMPANIES.items():
+
+    # Step 1 — known list (instant)
+    for company, info in KNOWN.items():
         if company.lower() in name_lower:
-            return company, info["ticker"], info["exchange"], info["currency"]
-    return None, None, None, None
+            return info["ticker"], info["exchange"], info["currency"]
+
+    # Step 2 — check cache
+    cached = get_cached_ticker(name)
+    if cached:
+        ticker, exchange = cached
+        if ticker == "NONE":  # previously confirmed not public
+            return None, None, None
+        return ticker, exchange, "USD"
+
+    # Step 3 — live EDGAR search
+    log.info(f"  Searching EDGAR for: {name}")
+    ticker, exchange = search_edgar(name)
+
+    if ticker:
+        cache_ticker(name, ticker, exchange or "NASDAQ")
+        return ticker, exchange or "NASDAQ", "USD"
+    else:
+        # Cache negative result so we don't search again
+        cache_ticker(name, "NONE", "NONE")
+        return None, None, None
 
 # =========================================================
 # SEC INSIDER TRADING
@@ -214,8 +313,11 @@ def find_company(name):
 def get_insider_activity(ticker):
     try:
         since = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-        url   = f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22&dateRange=custom&startdt={since}&enddt={datetime.now().strftime('%Y-%m-%d')}&forms=4"
-        req   = urllib.request.Request(url, headers={"User-Agent": "contractbot@gmail.com"})
+        today = datetime.now().strftime("%Y-%m-%d")
+        url   = (f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22"
+                 f"&dateRange=custom&startdt={since}&enddt={today}&forms=4")
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "contractbot@gmail.com"})
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
         hits = data.get("hits", {}).get("hits", [])
@@ -234,7 +336,7 @@ def get_insider_activity(ticker):
 
 def fetch_us_awards():
     end   = datetime.now()
-    start = end - timedelta(days=2)
+    start = end - timedelta(hours=LOOKBACK_HOURS)
     payload = json.dumps({
         "filters": {
             "award_type_codes": ["A","B","C","D"],
@@ -285,49 +387,45 @@ def fetch_us_awards():
 
 def fetch_uk_awards():
     try:
-        min_gbp = int(MIN_AWARD_USD * 0.79)
-        payload = json.dumps({
-            "searchCriteria": {
-                "types": ["Award"],
-                "publishedFrom": (datetime.now()-timedelta(days=2)).strftime("%Y-%m-%dT00:00:00"),
-                "publishedTo":   datetime.now().strftime("%Y-%m-%dT23:59:59"),
-                "valueFrom":     min_gbp,
-            },
-            "size": 100,
-            "page": 1,
-        }).encode()
+        since = (datetime.now()-timedelta(hours=LOOKBACK_HOURS)).strftime("%Y-%m-%dT%H:%M:%S")
+        now   = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        url   = (f"https://www.contractsfinder.service.gov.uk"
+                 f"/Published/Notices/OCDS/Search"
+                 f"?publishedFrom={since}&publishedTo={now}"
+                 f"&stages=award&limit=100")
         req = urllib.request.Request(
-            "https://www.contractsfinder.service.gov.uk/Published/Notices/PublishedNoticesSearchApi/Search",
-            data=payload,
-            headers={"Content-Type": "application/json",
-                     "User-Agent": "ContractBot/1.0"},
-            method="POST",
-        )
+            url, headers={"User-Agent": "ContractBot/1.0",
+                          "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=30) as r:
             data = json.loads(r.read())
         fx      = get_fx_rate("GBP")
         results = []
-        for a in data.get("results", []):
-            notice     = a.get("notice", {})
-            suppliers  = notice.get("suppliers", [{}])
-            name       = suppliers[0].get("name", "Unknown") if suppliers else "Unknown"
-            orgs       = notice.get("organisations", [{}])
-            agency     = orgs[0].get("name", "") if orgs else ""
-            amount_gbp = float((notice.get("value") or {}).get("amount", 0) or 0)
-            results.append({
-                "id":        notice.get("id", ""),
-                "recipient": name,
-                "amount":    amount_gbp,
-                "amount_usd": amount_gbp * fx,
-                "currency":  "GBP",
-                "agency":    agency,
-                "desc":      (notice.get("description") or "")[:200],
-                "awarded":   (notice.get("awardedDate") or "")[:10],
-                "expires":   (notice.get("contractEnd") or "")[:10],
-                "location":  "United Kingdom",
-                "country":   "UK",
-                "source":    "Contracts Finder (UK)",
-            })
+        for release in data.get("releases", []):
+            for award in release.get("awards", []):
+                amount_gbp = float(
+                    (award.get("value") or {}).get("amount", 0) or 0)
+                if amount_gbp * fx < MIN_AWARD_USD:
+                    continue
+                suppliers = award.get("suppliers", [{}])
+                name      = suppliers[0].get("name", "Unknown") if suppliers else "Unknown"
+                buyer     = release.get("buyer", {}).get("name", "")
+                desc      = (release.get("tender", {}).get("description") or "")[:200]
+                awarded   = (award.get("date") or "")[:10]
+                expires   = ((award.get("contractPeriod") or {}).get("endDate") or "")[:10]
+                results.append({
+                    "id":        release.get("ocid", ""),
+                    "recipient": name,
+                    "amount":    amount_gbp,
+                    "amount_usd": amount_gbp * fx,
+                    "currency":  "GBP",
+                    "agency":    buyer,
+                    "desc":      desc,
+                    "awarded":   awarded,
+                    "expires":   expires,
+                    "location":  "United Kingdom",
+                    "country":   "UK",
+                    "source":    "Contracts Finder (UK)",
+                })
         return results
     except Exception as e:
         log.warning(f"UK fetch failed: {e}")
@@ -339,16 +437,19 @@ def fetch_uk_awards():
 
 def fetch_canada_awards():
     try:
-        since   = (datetime.now()-timedelta(days=2)).strftime("%Y-%m-%d")
+        since   = (datetime.now()-timedelta(hours=LOOKBACK_HOURS)).strftime("%Y-%m-%d")
         min_cad = int(MIN_AWARD_USD * 1.36)
-        url     = (f"https://canadabuys.canada.ca/en/tender-opportunities/contract-awards/search"
-                   f"?limit=100&offset=0&sort=-contract_value"
-                   f"&contract_value_from={min_cad}"
-                   f"&contract_date_from={since}")
+        params  = urllib.parse.urlencode({
+            "limit":               100,
+            "offset":              0,
+            "sort":                "-contract_value",
+            "contract_value_from": min_cad,
+            "contract_date_from":  since,
+        })
+        url = f"https://canadabuys.canada.ca/en/tender-opportunities/contract-awards/search?{params}"
         req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "ContractBot/1.0", "Accept": "application/json"}
-        )
+            url, headers={"User-Agent": "ContractBot/1.0",
+                          "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=30) as r:
             data = json.loads(r.read())
         fx      = get_fx_rate("CAD")
@@ -381,23 +482,22 @@ def fetch_canada_awards():
 
 def fetch_israel_awards():
     try:
-        since   = (datetime.now()-timedelta(days=2)).strftime("%Y-%m-%d")
         fx      = get_fx_rate("ILS")
         min_ils = int(MIN_AWARD_USD / fx)
-        url     = (f"https://data.gov.il/api/3/action/datastore_search"
-                   f"?resource_id=e3b90efa-d19d-4ae6-9b09-f2b05703d2a2"
-                   f"&limit=100"
-                   f"&filters={{\"SuppliersNames\":\"\"}}"
-                   f"&sort=AwardDate desc")
+        since   = (datetime.now()-timedelta(hours=LOOKBACK_HOURS)).strftime("%Y-%m-%d")
+        params  = urllib.parse.urlencode({
+            "resource_id": "e3b90efa-d19d-4ae6-9b09-f2b05703d2a2",
+            "limit":       100,
+            "sort":        "AwardDate desc",
+        })
+        url = f"https://data.gov.il/api/3/action/datastore_search?{params}"
         req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "ContractBot/1.0", "Accept": "application/json"}
-        )
+            url, headers={"User-Agent": "ContractBot/1.0",
+                          "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=30) as r:
             data = json.loads(r.read())
         results = []
-        records = data.get("result", {}).get("records", [])
-        for a in records:
+        for a in data.get("result", {}).get("records", []):
             try:
                 amount_ils = float(str(a.get("Amount", "0")).replace(",", "") or 0)
             except:
@@ -430,7 +530,7 @@ def fetch_israel_awards():
 # PUSH NOTIFICATION
 # =========================================================
 
-def send_push(award, company, ticker, exchange, stock_currency,
+def send_push(award, ticker, exchange, stock_currency,
               price, cap, amount_usd, insider):
     recipient  = award.get("recipient", "Unknown")
     currency   = award.get("currency", "USD")
@@ -461,8 +561,8 @@ def send_push(award, company, ticker, exchange, stock_currency,
         f"Exchange : {exchange}",
         f"Ticker   : {ticker}",
     ]
-    if price:  lines.append(f"Price    : {price:.2f} {stock_currency or ''}")
-    if cap:    lines.append(f"Mkt Cap  : {cap}")
+    if price: lines.append(f"Price    : {price:.2f} {stock_currency or ''}")
+    if cap:   lines.append(f"Mkt Cap  : {cap}")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     if insider:
         lines += ["INSIDER ACTIVITY", insider, "━━━━━━━━━━━━━━━━━━━━"]
@@ -500,7 +600,6 @@ def check():
     log.info(f"Checking all markets — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     all_awards = []
-
     for name, fn in [("USA", fetch_us_awards), ("UK", fetch_uk_awards),
                      ("Canada", fetch_canada_awards), ("Israel", fetch_israel_awards)]:
         try:
@@ -518,28 +617,34 @@ def check():
         if already_seen(uid):
             continue
 
-        company, ticker, exchange, currency = find_company(award["recipient"])
-        if not company:
+        # Look up ticker — known list first then EDGAR
+        ticker, exchange, currency = find_company(award["recipient"])
+        if not ticker:
+            # Not publicly traded — skip
+            mark_seen(uid, award, award.get("amount_usd", 0),
+                      award["country"], "", "")
             continue
 
         amount_usd = award.get("amount_usd", award["amount"])
-        log.info(f"NEW ★ [{award['country']}] {award['recipient']} | {fmt_usd(amount_usd)} | {ticker or 'NO TICKER'}")
+        log.info(f"NEW ★ [{award['country']}] {award['recipient']} | "
+                 f"{fmt_usd(amount_usd)} | ${ticker} on {exchange}")
 
-        price, cap, stock_currency = None, None, None
-        if ticker:
-            price, cap, stock_currency = get_stock_info(ticker, exchange)
+        # Get live stock info
+        price, cap, stock_currency = get_stock_info(ticker, exchange)
 
+        # Get insider activity (US companies only)
         insider = None
-        if ticker and award.get("country") == "USA":
+        if award.get("country") == "USA":
             insider = get_insider_activity(ticker)
 
+        # Send push
         try:
-            send_push(award, company, ticker, exchange, stock_currency,
+            send_push(award, ticker, exchange, stock_currency,
                       price, cap, amount_usd, insider)
         except Exception as e:
             log.error(f"Push failed: {e}")
 
-        mark_seen(uid, award, amount_usd, award["country"], ticker or "", exchange or "")
+        mark_seen(uid, award, amount_usd, award["country"], ticker, exchange)
         new_count += 1
 
     log.info(f"Done — {new_count} new alerts sent")
@@ -553,8 +658,10 @@ print("  GLOBAL CONTRACT ALERT BOT")
 print("=" * 55)
 print(f"  Markets  : USA, UK, Canada, Israel")
 print(f"  Min award: {fmt_usd(MIN_AWARD_USD)}")
+print(f"  Lookback : {LOOKBACK_HOURS} hours per check")
 print(f"  Interval : every {CHECK_MINUTES} minutes")
 print(f"  ntfy     : ntfy.sh/{NTFY_TOPIC}")
+print(f"  Lookup   : Known list + SEC EDGAR live search")
 print("=" * 55)
 
 check()
