@@ -484,18 +484,99 @@ def check_insider_buys():
 # IDs increase by ~800-2000 per day
 # =========================================================
 
-# Base article ID — update this periodically as IDs drift
-WAR_GOV_BASE_ID   = 4499778   # May 22 2026
-WAR_GOV_BASE_DATE = "2026-05-22"
+# Known war.gov article IDs — bot updates this automatically
+# Format: "YYYY-MM-DD": article_id
+WAR_GOV_KNOWN = {
+    "2026-05-19": 4496137,
+    "2026-05-20": 4496900,
+    "2026-05-21": 4498916,
+    "2026-05-22": 4499778,
+}
 
-def estimate_article_ids(target_date):
-    """Estimate war.gov article IDs for a given date based on known IDs."""
-    base = datetime.strptime(WAR_GOV_BASE_DATE, "%Y-%m-%d")
-    diff = (target_date - base).days
-    # Average ~900 IDs per day based on observed pattern
-    center = WAR_GOV_BASE_ID + (diff * 900)
-    # Return a range to try around the estimate
-    return range(max(center - 2000, WAR_GOV_BASE_ID), center + 2000, 100)
+def get_dod_article(dt, headers):
+    """
+    Find and fetch the war.gov contract page for a given date.
+    Uses binary search around estimated ID — max 10 requests.
+    """
+    used_date = dt.strftime("%Y-%m-%d")
+    date_slug = dt.strftime("%B-%-d-%Y").lower()
+
+    # Calculate estimated ID using linear regression on known IDs
+    known_dates = sorted(WAR_GOV_KNOWN.keys())
+    if known_dates:
+        last_known_date = known_dates[-1]
+        last_known_id   = WAR_GOV_KNOWN[last_known_date]
+        days_diff = (dt - datetime.strptime(last_known_date, "%Y-%m-%d")).days
+        # Average 900 IDs per day
+        estimated_id = last_known_id + (days_diff * 900)
+    else:
+        estimated_id = 4503000
+
+    # Try IDs in expanding steps from estimate — fast binary approach
+    # Try: estimate, estimate±500, estimate±1000, estimate±1500, estimate±2000
+    candidates = [estimated_id]
+    for step in [500, 1000, 1500, 2000, 2500, 3000]:
+        candidates.extend([estimated_id + step, estimated_id - step])
+
+    for article_id in candidates:
+        if article_id < 4000000: continue
+        url = f"https://www.war.gov/News/Contracts/Contract/Article/{article_id}/contracts-for-{date_slug}/"
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=6) as r:
+                html = r.read().decode("utf-8", errors="ignore")
+            if "was awarded" in html.lower() or "is awarded" in html.lower():
+                # Update our known IDs
+                WAR_GOV_KNOWN[used_date] = article_id
+                log.info(f"DoD: found article {article_id} for {used_date}")
+                return article_id, html
+        except:
+            continue
+
+    return None, None
+
+def parse_dod_contracts(article_id, used_date, article):
+    """Parse contract awards from a war.gov article page."""
+    results   = []
+    seen_uids = set()
+    award_pattern = re.compile(
+        r'([A-Z][A-Za-z0-9 &.,\-]{2,70}?),\*?\s+[A-Z][a-zA-Z .]+,\s+[A-Z]{2},?\s+(?:was awarded|is awarded|are awarded|is being awarded)\s+(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
+        re.IGNORECASE
+    )
+    for match in award_pattern.finditer(article):
+        company = match.group(1).strip().rstrip(",*").strip()
+        if len(company) < 3 or company[0].islower():
+            continue
+        amt_str = match.group(2).replace(",", "")
+        try:
+            amount = float(amt_str)
+            if amount < 1_000:
+                amount *= 1_000_000
+        except:
+            continue
+        if amount < MIN_AWARD_USD:
+            continue
+        uid = f"DOD:{article_id}:{company[:30]}:{amount:.0f}"
+        if uid in seen_uids:
+            continue
+        seen_uids.add(uid)
+        end  = min(len(article), match.end() + 500)
+        desc = re.sub(r'<[^>]+>', '', article[match.end():end]).strip()[:200]
+        results.append({
+            "id":         uid,
+            "recipient":  company,
+            "amount":     amount,
+            "amount_usd": amount,
+            "currency":   "USD",
+            "agency":     "Department of Defense",
+            "desc":       desc,
+            "awarded":    used_date,
+            "expires":    "",
+            "location":   "USA",
+            "country":    "USA",
+            "source":     "war.gov (DoD — Real Time)",
+        })
+    return results
 
 def fetch_dod_awards():
     try:
@@ -504,78 +585,22 @@ def fetch_dod_awards():
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept":     "text/html,application/xhtml+xml",
         }
-        results   = []
-        seen_uids = set()
-        found_ids = {}  # article_id -> (date, html)
+        results = []
 
-        # Try today and yesterday
         for dt in [today, today - timedelta(days=1)]:
-            used_date  = dt.strftime("%Y-%m-%d")
-            date_slug  = dt.strftime("%B-%-d-%Y").lower()
-            cutoff     = (today - timedelta(days=2)).strftime("%Y-%m-%d")
+            used_date = dt.strftime("%Y-%m-%d")
+            cutoff    = (today - timedelta(days=2)).strftime("%Y-%m-%d")
             if used_date < cutoff:
                 continue
+            article_id, html = get_dod_article(dt, headers)
+            if html:
+                contracts = parse_dod_contracts(article_id, used_date, html)
+                log.info(f"DoD: parsed {len(contracts)} contracts for {used_date}")
+                results.extend(contracts)
+            else:
+                log.info(f"DoD: no contracts found for {used_date}")
 
-            # Try estimated ID range
-            id_range = estimate_article_ids(dt)
-            log.debug(f"DoD: trying ID range {id_range.start}-{id_range.stop} for {used_date}")
-
-            for article_id in id_range:
-                url = f"https://www.war.gov/News/Contracts/Contract/Article/{article_id}/contracts-for-{date_slug}/"
-                try:
-                    req = urllib.request.Request(url, headers=headers)
-                    with urllib.request.urlopen(req, timeout=8) as r:
-                        html = r.read().decode("utf-8", errors="ignore")
-                    # Verify this is actually a contract page
-                    if "contracts for" in html.lower() and "was awarded" in html.lower():
-                        found_ids[article_id] = (used_date, html)
-                        log.info(f"DoD: found contract page — article {article_id} for {used_date}")
-                        break
-                except:
-                    continue
-
-        # Parse all found contract pages
-        for article_id, (used_date, article) in found_ids.items():
-            log.info(f"DoD: parsing contracts for {used_date}")
-            award_pattern = re.compile(
-                r'([A-Z][A-Za-z0-9 &.,\-]{2,70}?),\*?\s+[A-Z][a-zA-Z .]+,\s+[A-Z]{2},?\s+(?:was awarded|is awarded|are awarded|is being awarded)\s+(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
-                re.IGNORECASE
-            )
-            for match in award_pattern.finditer(article):
-                company = match.group(1).strip().rstrip(",*").strip()
-                if len(company) < 3 or company[0].islower():
-                    continue
-                amt_str = match.group(2).replace(",", "")
-                try:
-                    amount = float(amt_str)
-                    if amount < 1_000:
-                        amount *= 1_000_000
-                except:
-                    continue
-                if amount < MIN_AWARD_USD:
-                    continue
-                uid = f"DOD:{article_id}:{company[:30]}:{amount:.0f}"
-                if uid in seen_uids:
-                    continue
-                seen_uids.add(uid)
-                end  = min(len(article), match.end() + 500)
-                desc = re.sub(r'<[^>]+>', '', article[match.end():end]).strip()[:200]
-                results.append({
-                    "id":         uid,
-                    "recipient":  company,
-                    "amount":     amount,
-                    "amount_usd": amount,
-                    "currency":   "USD",
-                    "agency":     "Department of Defense",
-                    "desc":       desc,
-                    "awarded":    used_date,
-                    "expires":    "",
-                    "location":   "USA",
-                    "country":    "USA",
-                    "source":     "war.gov (DoD — Real Time)",
-                })
-
-        log.info(f"DoD: parsed {len(results)} contracts total")
+        log.info(f"DoD: {len(results)} total contracts")
         return results
 
     except Exception as e:
