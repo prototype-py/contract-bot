@@ -478,63 +478,65 @@ def check_insider_buys():
 
 # =========================================================
 # FETCH DoD — war.gov DIRECT (real time, 5pm Eastern daily)
+# war.gov uses JavaScript rendering so we can't scrape the listing page.
+# Instead we brute-force try article IDs around today's expected range.
+# Known IDs: May19=4496137, May20=4496900, May21=4498916, May22=4499778
+# IDs increase by ~800-2000 per day
 # =========================================================
+
+# Base article ID — update this periodically as IDs drift
+WAR_GOV_BASE_ID   = 4499778   # May 22 2026
+WAR_GOV_BASE_DATE = "2026-05-22"
+
+def estimate_article_ids(target_date):
+    """Estimate war.gov article IDs for a given date based on known IDs."""
+    base = datetime.strptime(WAR_GOV_BASE_DATE, "%Y-%m-%d")
+    diff = (target_date - base).days
+    # Average ~900 IDs per day based on observed pattern
+    center = WAR_GOV_BASE_ID + (diff * 900)
+    # Return a range to try around the estimate
+    return range(max(center - 2000, WAR_GOV_BASE_ID), center + 2000, 100)
 
 def fetch_dod_awards():
     try:
         today   = datetime.now()
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept":     "text/html,application/xhtml+xml",
         }
         results   = []
         seen_uids = set()
+        found_ids = {}  # article_id -> (date, html)
 
-        # Fetch contracts listing page to find latest article links
-        listing_url = "https://www.war.gov/News/Contracts/"
-        req = urllib.request.Request(listing_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as r:
-            listing_html = r.read().decode("utf-8", errors="ignore")
-
-        # Find contract article links
-        article_links = re.findall(
-            r'/News/Contracts/Contract/Article/(\d+)/contracts-for-([^/"]+)/',
-            listing_html
-        )
-
-        if not article_links:
-            log.debug("DoD: no contract links found in war.gov listing")
-            return []
-
-        # Process most recent articles (last 2 business days)
-        for article_id, date_slug in article_links[:3]:
-            article_url = f"https://www.war.gov/News/Contracts/Contract/Article/{article_id}/contracts-for-{date_slug}/"
-            try:
-                req2 = urllib.request.Request(article_url, headers=headers)
-                with urllib.request.urlopen(req2, timeout=20) as r2:
-                    article = r2.read().decode("utf-8", errors="ignore")
-            except Exception as e:
-                log.debug(f"DoD: could not fetch {article_url}: {e}")
-                continue
-
-            # Parse date from slug e.g. "may-22-2026"
-            try:
-                parts     = date_slug.split("-")
-                month_num = datetime.strptime(parts[0], "%B").month
-                used_date = f"{parts[2]}-{month_num:02d}-{int(parts[1]):02d}"
-            except:
-                used_date = today.strftime("%Y-%m-%d")
-
-            # Only process last 2 days
-            cutoff = (today - timedelta(days=2)).strftime("%Y-%m-%d")
+        # Try today and yesterday
+        for dt in [today, today - timedelta(days=1)]:
+            used_date  = dt.strftime("%Y-%m-%d")
+            date_slug  = dt.strftime("%B-%-d-%Y").lower()
+            cutoff     = (today - timedelta(days=2)).strftime("%Y-%m-%d")
             if used_date < cutoff:
                 continue
 
-            log.info(f"DoD: parsing contracts for {used_date} (article {article_id})")
+            # Try estimated ID range
+            id_range = estimate_article_ids(dt)
+            log.debug(f"DoD: trying ID range {id_range.start}-{id_range.stop} for {used_date}")
 
-            # Parse contract awards
-            # war.gov format: "Company Name, City, State, was awarded a $X,XXX,XXX contract"
+            for article_id in id_range:
+                url = f"https://www.war.gov/News/Contracts/Contract/Article/{article_id}/contracts-for-{date_slug}/"
+                try:
+                    req = urllib.request.Request(url, headers=headers)
+                    with urllib.request.urlopen(req, timeout=8) as r:
+                        html = r.read().decode("utf-8", errors="ignore")
+                    # Verify this is actually a contract page
+                    if "contracts for" in html.lower() and "was awarded" in html.lower():
+                        found_ids[article_id] = (used_date, html)
+                        log.info(f"DoD: found contract page — article {article_id} for {used_date}")
+                        break
+                except:
+                    continue
+
+        # Parse all found contract pages
+        for article_id, (used_date, article) in found_ids.items():
+            log.info(f"DoD: parsing contracts for {used_date}")
             award_pattern = re.compile(
                 r'([A-Z][A-Za-z0-9 &.,\-]{2,70}?),\*?\s+[A-Z][a-zA-Z .]+,\s+[A-Z]{2},?\s+(?:was awarded|is awarded|are awarded|is being awarded)\s+(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
                 re.IGNORECASE
