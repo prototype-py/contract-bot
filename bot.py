@@ -645,7 +645,7 @@ def check_insider_buys():
                     log.info(f"INSIDER BUY ★ ${ticker} | {signal['insider']} ({signal['title']}) | "
                              f"{fmt_usd(signal['amount'])} | {signal['shares']:,} shares @ ${signal['price']:.2f}")
 
-                    price, cap, currency, exchange = get_stock_info(ticker)
+                    stock_price, cap, currency, exchange = get_stock_info(ticker)
 
                     try:
                         send_insider_push(
