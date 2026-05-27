@@ -18,7 +18,7 @@ from pathlib import Path
 
 NTFY_TOPIC          = "my-contract-alerts"
 MIN_AWARD_USD       = 5_000_000
-CHECK_MINUTES       = 60
+CHECK_MINUTES       = 30
 LOOKBACK_HOURS      = 2
 DATABASE            = "contracts.db"
 MIN_DEAL_SCORE      = 5
