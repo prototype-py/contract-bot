@@ -357,124 +357,312 @@ def find_company(name):
     return None, None, None
 
 # =========================================================
-# SEC INSIDER TRADING — STANDALONE MONITOR
-# Checks all watchlist tickers for significant insider BUYS
+# SEC INSIDER TRADING — PROPER XML PARSER
+#
+# Architecture:
+#   1. Search SEC EDGAR for recent Form 4 filings by ticker
+#   2. Get accession number for each filing
+#   3. Fetch the actual Form 4 XML document
+#   4. Parse structured fields:
+#      - transactionCode (P=purchase, S=sale, M=option, A=grant)
+#      - transactionShares
+#      - transactionPricePerShare
+#      - officerTitle / isDirector / isOfficer
+#      - directOrIndirectOwnership
+#   5. Filter for: P only, direct, C-suite, over threshold
+#   6. Cache parsed results to avoid re-fetching same filing
 # =========================================================
 
-def get_insider_buys(ticker):
+SEC_HEADERS = {
+    "User-Agent": "ContractAlertBot/2.0 admin@contractbot.app",
+    "Accept":     "application/json, text/html, application/xml",
+}
+
+def fetch_recent_form4s(ticker):
     """
-    Fetch Form 4 filings for a ticker and return significant open market buys.
-    Filters for:
-    - Transaction type P (open market purchase) only
-    - C-suite and directors only
-    - Over MIN_INSIDER_BUY_USD threshold
+    Step 1: Find recent Form 4 filings for a ticker via SEC EDGAR full-text search.
+    Returns list of {accession_number, filed_date, filer_name, cik}
     """
     try:
-        since = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+        since = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
         today = datetime.now().strftime("%Y-%m-%d")
         url   = (f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22"
                  f"&dateRange=custom&startdt={since}&enddt={today}&forms=4")
-        req = urllib.request.Request(url, headers={"User-Agent":"contractbot@gmail.com"})
+        req = urllib.request.Request(url, headers=SEC_HEADERS)
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
 
-        hits = data.get("hits",{}).get("hits",[])
-        buys = []
+        filings = []
+        for hit in data.get("hits",{}).get("hits",[]):
+            src = hit.get("_source",{})
+            acc = src.get("file_num","") or src.get("accession_no","")
+            # Convert accession number format: 0001234567-26-000123
+            raw_acc = hit.get("_id","")
+            filings.append({
+                "accession":  raw_acc,
+                "filed":      src.get("file_date",""),
+                "filer":      src.get("display_names",["Unknown"])[0],
+                "cik":        src.get("entity_id",""),
+            })
+        return filings
+    except Exception as e:
+        log.debug(f"Form4 search failed for {ticker}: {e}")
+        return []
 
-        for hit in hits:
-            src         = hit.get("_source", {})
-            filed       = src.get("file_date","")
-            names       = src.get("display_names", [])
-            insider_name = names[0] if names else "Unknown"
-            form_id     = src.get("file_num","")
+def get_form4_xml_url(accession_raw, cik):
+    """
+    Step 2: Get the XML document URL from the filing index.
+    SEC filing index: /Archives/edgar/data/{cik}/{accession}/
+    """
+    try:
+        # Normalize accession number
+        acc = accession_raw.replace("-","")
+        acc_formatted = f"{acc[:10]}-{acc[10:12]}-{acc[12:]}"
+        cik_padded = str(cik).zfill(10)
 
-            # Get the actual Form 4 XML to check transaction type and amount
-            accession = src.get("period_of_report","")
-            entity_id = src.get("entity_id","")
+        # Fetch filing index JSON
+        idx_url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
+        req = urllib.request.Request(idx_url, headers=SEC_HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
 
-            # Try to get transaction details from the filing index
-            try:
-                idx_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={entity_id}&type=4&dateb=&owner=include&count=5&search_text="
-                idx_req = urllib.request.Request(idx_url, headers={"User-Agent":"contractbot@gmail.com"})
-                with urllib.request.urlopen(idx_req, timeout=8) as r2:
-                    idx_content = r2.read().decode("utf-8")
+        # Find XML document in recent filings
+        # Try direct filing index page
+        filing_url = (f"https://www.sec.gov/cgi-bin/browse-edgar"
+                     f"?action=getcompany&CIK={cik}&type=4"
+                     f"&dateb=&owner=include&count=5&search_text=&output=atom")
+        req2 = urllib.request.Request(filing_url, headers=SEC_HEADERS)
+        with urllib.request.urlopen(req2, timeout=10) as r2:
+            atom = r2.read().decode("utf-8")
 
-                # Look for purchase amounts in the filing
-                amt_matches = re.findall(r'P.*?\$([0-9,]+(?:\.[0-9]+)?)', idx_content)
-                if not amt_matches:
-                    continue
+        # Find accession numbers in atom feed
+        acc_matches = re.findall(r'Accession Number.*?([0-9]{10}-[0-9]{2}-[0-9]{6})', atom)
+        if not acc_matches:
+            return None
 
-                for amt_str in amt_matches[:3]:
-                    try:
-                        amount = float(amt_str.replace(",",""))
-                        if amount < MIN_INSIDER_BUY_USD:
-                            continue
-                        buys.append({
-                            "ticker":       ticker,
-                            "insider":      insider_name,
-                            "amount":       amount,
-                            "filed":        filed,
-                            "uid":          f"INSIDER:{ticker}:{insider_name}:{filed}:{amount:.0f}",
-                        })
-                    except:
-                        continue
-            except:
-                # Fallback — just flag the filing exists if it looks like a buy
-                if filed >= since:
-                    buys.append({
-                        "ticker":   ticker,
-                        "insider":  insider_name,
-                        "amount":   MIN_INSIDER_BUY_USD,
-                        "filed":    filed,
-                        "uid":      f"INSIDER:{ticker}:{insider_name}:{filed}",
-                    })
+        # Use the most recent accession
+        latest_acc = acc_matches[0].replace("-","")
+        xml_index  = (f"https://www.sec.gov/Archives/edgar/data/{cik}"
+                     f"/{latest_acc}/{latest_acc}-index.htm")
+        req3 = urllib.request.Request(xml_index, headers=SEC_HEADERS)
+        with urllib.request.urlopen(req3, timeout=10) as r3:
+            idx_html = r3.read().decode("utf-8")
 
-        return buys
+        # Find the XML file
+        xml_files = re.findall(r'href="([^"]+\.xml)"', idx_html, re.IGNORECASE)
+        for xml_file in xml_files:
+            if "form4" in xml_file.lower() or "xsl" not in xml_file.lower():
+                if xml_file.startswith("/"):
+                    return f"https://www.sec.gov{xml_file}"
+                else:
+                    return f"https://www.sec.gov/Archives/edgar/data/{cik}/{latest_acc}/{xml_file}"
+
+        return None
+    except Exception as e:
+        log.debug(f"XML URL lookup failed: {e}")
+        return None
+
+def parse_form4_xml(xml_url, ticker, filer_name, filed_date):
+    """
+    Step 3: Parse the Form 4 XML and extract structured transaction data.
+    Returns list of validated insider buy signals.
+    """
+    try:
+        req = urllib.request.Request(xml_url, headers=SEC_HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            xml = r.read().decode("utf-8", errors="ignore")
+
+        signals = []
+
+        # Extract reporter info
+        officer_title = ""
+        is_director   = False
+        is_officer    = False
+
+        title_match = re.search(r'<officerTitle>(.*?)</officerTitle>', xml, re.IGNORECASE)
+        if title_match:
+            officer_title = title_match.group(1).strip()
+
+        dir_match = re.search(r'<isDirector>(.*?)</isDirector>', xml, re.IGNORECASE)
+        if dir_match:
+            is_director = dir_match.group(1).strip() in ("1","true","True")
+
+        off_match = re.search(r'<isOfficer>(.*?)</isOfficer>', xml, re.IGNORECASE)
+        if off_match:
+            is_officer = off_match.group(1).strip() in ("1","true","True")
+
+        # Only process C-suite and directors
+        if not is_director and not is_officer:
+            return []
+
+        title_lower = officer_title.lower()
+        is_csuite = any(t in title_lower for t in [
+            "chief executive","ceo","chief financial","cfo",
+            "chief operating","coo","president","chairman",
+            "chief technology","cto","executive vice",
+        ])
+        # Accept directors too but flag them differently
+        role = "C-Suite" if is_csuite else "Director"
+
+        # Parse non-derivative transactions (actual stock purchases)
+        # Find all nonDerivativeTransaction blocks
+        nd_blocks = re.findall(
+            r'<nonDerivativeTransaction>(.*?)</nonDerivativeTransaction>',
+            xml, re.DOTALL | re.IGNORECASE
+        )
+
+        for block in nd_blocks:
+            # Transaction code — P = open market purchase
+            code_match = re.search(r'<transactionCode>(.*?)</transactionCode>', block, re.IGNORECASE)
+            if not code_match or code_match.group(1).strip() != "P":
+                continue
+
+            # Direct ownership only (D = direct, I = indirect)
+            ownership_match = re.search(r'<directOrIndirectOwnership>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
+            if ownership_match and ownership_match.group(1).strip() == "I":
+                continue  # Skip indirect ownership
+
+            # Shares
+            shares_match = re.search(r'<transactionShares>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
+            shares = 0
+            if shares_match:
+                try: shares = float(shares_match.group(1).strip().replace(",",""))
+                except: shares = 0
+
+            # Price per share
+            price_match = re.search(r'<transactionPricePerShare>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
+            price_per_share = 0
+            if price_match:
+                try: price_per_share = float(price_match.group(1).strip().replace(",",""))
+                except: price_per_share = 0
+
+            # Calculate total value
+            total_value = shares * price_per_share
+            if total_value < MIN_INSIDER_BUY_USD:
+                continue
+
+            # Security type
+            sec_match = re.search(r'<securityTitle>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
+            security = sec_match.group(1).strip() if sec_match else "Common Stock"
+
+            signals.append({
+                "ticker":        ticker,
+                "insider":       filer_name,
+                "title":         officer_title or role,
+                "role":          role,
+                "shares":        int(shares),
+                "price":         price_per_share,
+                "amount":        total_value,
+                "security":      security,
+                "filed":         filed_date,
+                "uid":           f"INSIDER:{ticker}:{filer_name}:{filed_date}:{total_value:.0f}",
+            })
+
+        return signals
 
     except Exception as e:
-        log.debug(f"Insider lookup failed for {ticker}: {e}")
+        log.debug(f"Form4 XML parse failed for {xml_url}: {e}")
         return []
+
+# Cache for parsed Form 4 results to avoid re-fetching
+_insider_cache = {}  # uid -> parsed result
 
 def check_insider_buys():
     """
     Scan all watchlist tickers for significant insider buys.
-    Send standalone alerts independent of contract activity.
+    Uses proper SEC XML parsing for accuracy.
     """
     log.info("Checking insider activity across watchlist...")
     alerts_sent = 0
 
     for ticker in INSIDER_WATCHLIST:
         try:
-            buys = get_insider_buys(ticker)
-            for buy in buys:
-                uid = buy["uid"]
-                if already_seen_insider(uid):
-                    continue
+            # Step 1: Find recent Form 4 filings
+            filings = fetch_recent_form4s(ticker)
+            if not filings:
+                time.sleep(0.5)
+                continue
 
-                amount    = buy["amount"]
-                insider   = buy["insider"]
-                filed     = buy["filed"]
+            for filing in filings[:3]:  # Check last 3 filings max
+                acc      = filing["accession"]
+                filed    = filing["filed"]
+                filer    = filing["filer"]
+                cik      = filing["cik"]
 
-                log.info(f"INSIDER BUY ★ ${ticker} | {insider} | {fmt_usd(amount)}")
+                # Check cache first
+                cache_key = f"{ticker}:{acc}"
+                if cache_key in _insider_cache:
+                    signals = _insider_cache[cache_key]
+                else:
+                    # Step 2: Get XML URL
+                    xml_url = get_form4_xml_url(acc, cik)
+                    if not xml_url:
+                        _insider_cache[cache_key] = []
+                        time.sleep(0.5)
+                        continue
 
-                # Get stock info
-                price, cap, currency, exchange = get_stock_info(ticker)
+                    # Step 3: Parse XML
+                    signals = parse_form4_xml(xml_url, ticker, filer, filed)
+                    _insider_cache[cache_key] = signals
+                    time.sleep(0.5)  # Respectful delay for SEC servers
 
-                # Send insider alert
-                try:
-                    send_insider_push(ticker, insider, amount, filed, price, cap, exchange)
-                    alerts_sent += 1
-                except Exception as e:
-                    log.error(f"Insider push failed for {ticker}: {e}")
+                # Step 4: Alert on new significant buys
+                for signal in signals:
+                    uid = signal["uid"]
+                    if already_seen_insider(uid):
+                        continue
 
-                mark_seen_insider(uid, ticker, insider, "", amount)
+                    log.info(f"INSIDER BUY ★ ${ticker} | {signal['insider']} ({signal['title']}) | "
+                             f"{fmt_usd(signal['amount'])} | {signal['shares']:,} shares @ ${signal['price']:.2f}")
+
+                    price, cap, currency, exchange = get_stock_info(ticker)
+
+                    try:
+                        send_insider_push(
+                            ticker, signal["insider"], signal["title"],
+                            signal["role"], signal["shares"], signal["price"],
+                            signal["amount"], signal["security"], filed,
+                            price, cap, exchange
+                        )
+                        alerts_sent += 1
+                    except Exception as e:
+                        log.error(f"Insider push failed for {ticker}: {e}")
+
+                    mark_seen_insider(uid, ticker, signal["insider"], signal["title"], signal["amount"])
 
         except Exception as e:
             log.debug(f"Insider check failed for {ticker}: {e}")
 
-        time.sleep(0.3)  # Be nice to SEC servers
+        time.sleep(0.5)  # Respectful rate limiting
 
     log.info(f"Insider check done — {alerts_sent} alerts sent")
+
+def get_insider_buys(ticker):
+    """
+    Lightweight version for contract cross-reference.
+    Returns a note string if recent insider buys found, else None.
+    """
+    try:
+        filings = fetch_recent_form4s(ticker)
+        for filing in filings[:2]:
+            cache_key = f"{ticker}:{filing['accession']}"
+            if cache_key in _insider_cache:
+                signals = _insider_cache[cache_key]
+            else:
+                xml_url = get_form4_xml_url(filing["accession"], filing["cik"])
+                if not xml_url:
+                    continue
+                signals = parse_form4_xml(xml_url, ticker, filing["filer"], filing["filed"])
+                _insider_cache[cache_key] = signals
+
+            if signals:
+                s = signals[0]
+                return (f"{s['insider']} ({s['title']}) bought "
+                        f"{s['shares']:,} shares @ ${s['price']:.2f} "
+                        f"= {fmt_usd(s['amount'])} on {s['filed']}")
+        return None
+    except:
+        return None
 
 # =========================================================
 # FETCH DoD — war.gov DIRECT (real time, 5pm Eastern daily)
