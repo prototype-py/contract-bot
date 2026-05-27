@@ -411,55 +411,52 @@ def fetch_recent_form4s(ticker):
 
 def get_form4_xml_url(accession_raw, cik):
     """
-    Step 2: Get the XML document URL from the filing index.
-    SEC filing index: /Archives/edgar/data/{cik}/{accession}/
+    Step 2: Build the XML URL directly from the accession number.
+
+    SEC URL structure:
+    /Archives/edgar/data/{CIK}/{accession_nodashes}/{accession_nodashes}-index.htm
+
+    We use the exact accession from the search result — no refetching.
+    Then find the XML document in the filing index.
     """
     try:
-        # Normalize accession number
-        acc = accession_raw.replace("-","")
-        acc_formatted = f"{acc[:10]}-{acc[10:12]}-{acc[12:]}"
-        cik_padded = str(cik).zfill(10)
+        # Normalize accession — strip dashes for URL path
+        acc_nodashes = accession_raw.replace("-", "").replace(":", "")
+        # Reformat with dashes for filename: 0001234567-26-000123
+        if len(acc_nodashes) == 18:
+            acc_dashes = f"{acc_nodashes[:10]}-{acc_nodashes[10:12]}-{acc_nodashes[12:]}"
+        else:
+            # Try to extract from raw string
+            acc_dashes = re.sub(r'(\d{10})(\d{2})(\d{6})', r'\1-\2-\3', acc_nodashes)
 
-        # Fetch filing index JSON
-        idx_url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
+        # Build filing index URL directly
+        idx_url = (f"https://www.sec.gov/Archives/edgar/data"
+                   f"/{cik}/{acc_nodashes}/{acc_dashes}-index.htm")
+
         req = urllib.request.Request(idx_url, headers=SEC_HEADERS)
         with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
+            idx_html = r.read().decode("utf-8", errors="ignore")
 
-        # Find XML document in recent filings
-        # Try direct filing index page
-        filing_url = (f"https://www.sec.gov/cgi-bin/browse-edgar"
-                     f"?action=getcompany&CIK={cik}&type=4"
-                     f"&dateb=&owner=include&count=5&search_text=&output=atom")
-        req2 = urllib.request.Request(filing_url, headers=SEC_HEADERS)
-        with urllib.request.urlopen(req2, timeout=10) as r2:
-            atom = r2.read().decode("utf-8")
+        # Find XML files in the index — prefer the primary document
+        xml_links = re.findall(r'href="([^"]*\.xml)"', idx_html, re.IGNORECASE)
 
-        # Find accession numbers in atom feed
-        acc_matches = re.findall(r'Accession Number.*?([0-9]{10}-[0-9]{2}-[0-9]{6})', atom)
-        if not acc_matches:
-            return None
-
-        # Use the most recent accession
-        latest_acc = acc_matches[0].replace("-","")
-        xml_index  = (f"https://www.sec.gov/Archives/edgar/data/{cik}"
-                     f"/{latest_acc}/{latest_acc}-index.htm")
-        req3 = urllib.request.Request(xml_index, headers=SEC_HEADERS)
-        with urllib.request.urlopen(req3, timeout=10) as r3:
-            idx_html = r3.read().decode("utf-8")
-
-        # Find the XML file
-        xml_files = re.findall(r'href="([^"]+\.xml)"', idx_html, re.IGNORECASE)
-        for xml_file in xml_files:
-            if "form4" in xml_file.lower() or "xsl" not in xml_file.lower():
-                if xml_file.startswith("/"):
-                    return f"https://www.sec.gov{xml_file}"
-                else:
-                    return f"https://www.sec.gov/Archives/edgar/data/{cik}/{latest_acc}/{xml_file}"
+        # Filter out XSLT/stylesheet files, prefer the main Form 4 XML
+        for link in xml_links:
+            lower = link.lower()
+            if "xsl" in lower or "stylesheet" in lower:
+                continue
+            # Build absolute URL
+            if link.startswith("http"):
+                return link
+            elif link.startswith("/"):
+                return f"https://www.sec.gov{link}"
+            else:
+                return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodashes}/{link}"
 
         return None
+
     except Exception as e:
-        log.debug(f"XML URL lookup failed: {e}")
+        log.debug(f"XML URL lookup failed for {accession_raw}: {e}")
         return None
 
 def parse_form4_xml(xml_url, ticker, filer_name, filed_date):
