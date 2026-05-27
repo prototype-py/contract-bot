@@ -180,7 +180,8 @@ def init_db():
     db.commit()
     return db
 
-DB = init_db()
+DB      = init_db()
+DB_LOCK = threading.Lock()
 
 def already_seen(uid):
     return DB.execute("SELECT 1 FROM seen_awards WHERE uid=?", (uid,)).fetchone() is not None
@@ -189,30 +190,33 @@ def already_seen_insider(uid):
     return DB.execute("SELECT 1 FROM seen_insider WHERE uid=?", (uid,)).fetchone() is not None
 
 def mark_seen(uid, award, amount_usd, country, ticker, exchange, deal_score):
-    DB.execute("""
-        INSERT OR IGNORE INTO seen_awards
-        (uid, recipient, amount_usd, agency, country, ticker, exchange, deal_score, seen_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (uid, award.get("recipient",""), amount_usd, award.get("agency",""),
-          country, ticker, exchange, deal_score, datetime.now().isoformat()))
-    DB.commit()
+    with DB_LOCK:
+        DB.execute("""
+            INSERT OR IGNORE INTO seen_awards
+            (uid, recipient, amount_usd, agency, country, ticker, exchange, deal_score, seen_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (uid, award.get("recipient",""), amount_usd, award.get("agency",""),
+              country, ticker, exchange, deal_score, datetime.now().isoformat()))
+        DB.commit()
 
 def mark_seen_insider(uid, ticker, insider_name, title, amount_usd):
-    DB.execute("""
-        INSERT OR IGNORE INTO seen_insider
-        (uid, ticker, insider_name, title, amount_usd, seen_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (uid, ticker, insider_name, title, amount_usd, datetime.now().isoformat()))
-    DB.commit()
+    with DB_LOCK:
+        DB.execute("""
+            INSERT OR IGNORE INTO seen_insider
+            (uid, ticker, insider_name, title, amount_usd, seen_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (uid, ticker, insider_name, title, amount_usd, datetime.now().isoformat()))
+        DB.commit()
 
 def get_cached_ticker(name):
     row = DB.execute("SELECT ticker, exchange FROM ticker_cache WHERE name=?", (name,)).fetchone()
     return (row[0], row[1]) if row else None
 
 def cache_ticker(name, ticker, exchange):
-    DB.execute("INSERT OR REPLACE INTO ticker_cache (name, ticker, exchange, found_at) VALUES (?, ?, ?, ?)",
-               (name, ticker, exchange, datetime.now().isoformat()))
-    DB.commit()
+    with DB_LOCK:
+        DB.execute("INSERT OR REPLACE INTO ticker_cache (name, ticker, exchange, found_at) VALUES (?, ?, ?, ?)",
+                   (name, ticker, exchange, datetime.now().isoformat()))
+        DB.commit()
 
 # =========================================================
 # HELPERS
@@ -244,25 +248,41 @@ def fmt_local(n, currency):
 
 def get_fx_rate(currency):
     if currency == "USD": return 1.0
+    # Check cache
+    if currency in _fx_cache:
+        rate, ts = _fx_cache[currency]
+        if (datetime.now() - ts).seconds < FX_CACHE_TTL:
+            return rate
     try:
         pairs = {"GBP":"GBPUSD=X","CAD":"CADUSD=X","ILS":"ILSUSD=X"}
         url   = f"https://query1.finance.yahoo.com/v8/finance/chart/{pairs.get(currency,'GBPUSD=X')}?interval=1d&range=1d"
         req   = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
-        return data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+        rate = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+        _fx_cache[currency] = (rate, datetime.now())
+        return rate
     except:
         return {"GBP":1.27,"CAD":0.73,"ILS":0.27}.get(currency, 1.0)
 
 def get_stock_info(ticker):
+    # Check cache first
+    if ticker in _stock_cache:
+        price, cap, curr, exch, ts = _stock_cache[ticker]
+        if (datetime.now() - ts).seconds < STOCK_CACHE_TTL:
+            return price, cap, curr, exch
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
         req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
-        meta = data["chart"]["result"][0]["meta"]
-        return (meta.get("regularMarketPrice",0), meta.get("marketCap",0),
-                meta.get("currency","USD"), meta.get("exchangeName",""))
+        meta  = data["chart"]["result"][0]["meta"]
+        price = meta.get("regularMarketPrice",0)
+        cap   = meta.get("marketCap",0)
+        curr  = meta.get("currency","USD")
+        exch  = meta.get("exchangeName","")
+        _stock_cache[ticker] = (price, cap, curr, exch, datetime.now())
+        return price, cap, curr, exch
     except:
         return None, None, None, None
 
@@ -299,7 +319,14 @@ def score_deal(amount_usd, market_cap, years, insider):
     elif years >= 3: score += 7;  reasons.append(f"{years:.0f} year contract — multi-year revenue")
     elif years >= 2: score += 4;  reasons.append(f"{years:.0f} year contract")
     elif years >= 1: score += 2;  reasons.append(f"{years:.0f} year contract")
-    if insider: score += 10; reasons.append("Insider buying detected — strong confirmation")
+    if insider:
+        insider_lower = insider.lower() if insider else ""
+        if any(t in insider_lower for t in ["chief executive","ceo"]):
+            score += 15; reasons.append("CEO open market buy — very high conviction signal")
+        elif any(t in insider_lower for t in ["chief financial","cfo","chief operating","coo","president"]):
+            score += 12; reasons.append("C-Suite open market buy — high conviction signal")
+        else:
+            score += 8;  reasons.append("Director/Officer open market buy — positive signal")
     score = min(score, 100)
     if score >= 70:   rating = "STRONG BUY"
     elif score >= 50: rating = "HIGH VALUE"
@@ -377,6 +404,12 @@ SEC_HEADERS = {
     "User-Agent": "ContractAlertBot/2.0 admin@contractbot.app",
     "Accept":     "application/json, text/html, application/xml",
 }
+
+# ── In-memory caches with TTL ─────────────────────────────────────────────────
+_stock_cache = {}   # ticker -> (price, cap, currency, exchange, timestamp)
+_fx_cache    = {}   # currency -> (rate, timestamp)
+STOCK_CACHE_TTL = 600   # 10 minutes
+FX_CACHE_TTL    = 3600  # 1 hour
 
 def fetch_recent_form4s(ticker):
     """
@@ -638,21 +671,11 @@ def get_insider_buys(ticker):
     """
     Lightweight version for contract cross-reference.
     Returns a note string if recent insider buys found, else None.
+    Only uses cache — does not make new network calls during contract checks.
     """
     try:
-        filings = fetch_recent_form4s(ticker)
-        for filing in filings[:2]:
-            cache_key = f"{ticker}:{filing['accession']}"
-            if cache_key in _insider_cache:
-                signals = _insider_cache[cache_key]
-            else:
-                xml_url = get_form4_xml_url(filing["accession"], filing["cik"])
-                if not xml_url:
-                    continue
-                signals = parse_form4_xml(xml_url, ticker, filing["filer"], filing["filed"])
-                _insider_cache[cache_key] = signals
-
-            if signals:
+        for cache_key, signals in _insider_cache.items():
+            if cache_key.startswith(f"{ticker}:") and signals:
                 s = signals[0]
                 return (f"{s['insider']} ({s['title']}) bought "
                         f"{s['shares']:,} shares @ ${s['price']:.2f} "
@@ -1022,7 +1045,7 @@ def send_push(award, ticker, exchange, stock_currency, price,
 # PUSH — INSIDER BUY ALERT
 # =========================================================
 
-def send_insider_push(ticker, insider, amount, filed, price, cap, exchange):
+def send_insider_push(ticker, insider, title, role, shares, price_paid, amount, security, filed, stock_price, cap, exchange):
     cap_str    = fmt_usd(cap) if cap else "Unknown"
     alerted_at = datetime.now().strftime("%b %d %Y at %I:%M %p")
     title      = f"🔔 INSIDER BUY | ${ticker}"
@@ -1117,12 +1140,8 @@ def check():
         amount_usd = award.get("amount_usd", award["amount"])
         price, cap_raw, stock_currency, _ = get_stock_info(ticker)
 
-        # Check if this ticker also has recent insider buys — bonus signal
-        insider_note = None
-        insider_buys = get_insider_buys(ticker)
-        if insider_buys:
-            top = insider_buys[0]
-            insider_note = f"Insider bought {fmt_usd(top['amount'])} on {top['filed']}"
+        # Check if this ticker has recent insider buys — bonus signal
+        insider_note = get_insider_buys(ticker)  # returns string or None
 
         years = get_contract_years(award.get("awarded",""), award.get("expires",""))
         deal_score, rating, reasons = score_deal(amount_usd, cap_raw, years, insider_note)
