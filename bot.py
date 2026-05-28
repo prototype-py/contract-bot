@@ -699,6 +699,8 @@ WAR_GOV_KNOWN = {
     "2026-05-20": 4496900,
     "2026-05-21": 4498916,
     "2026-05-22": 4499778,
+    "2026-05-26": 4500905,
+    "2026-05-27": 4502028,
 }
 
 def get_dod_article(dt, headers):
@@ -723,7 +725,7 @@ def get_dod_article(dt, headers):
     # Try IDs in expanding steps from estimate — fast binary approach
     # Try: estimate, estimate±500, estimate±1000, estimate±1500, estimate±2000
     candidates = [estimated_id]
-    for step in [500, 1000, 1500, 2000, 2500, 3000]:
+    for step in [200, 400, 600, 800, 1000, 1500, 2000, 2500, 3000]:
         candidates.extend([estimated_id + step, estimated_id - step])
 
     for article_id in candidates:
