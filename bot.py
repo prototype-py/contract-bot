@@ -22,7 +22,7 @@ CHECK_MINUTES       = 30
 LOOKBACK_HOURS      = 2
 DATABASE            = "contracts.db"
 MIN_DEAL_SCORE      = 5
-MIN_INSIDER_BUY_USD = 250_000   # Only alert on buys over $250K
+MIN_INSIDER_BUY_USD = 250_000
 
 # =========================================================
 # LOGGING
@@ -99,6 +99,7 @@ KNOWN = {
     "IBM":                 {"ticker": "IBM",    "exchange": "NYSE",   "currency": "USD"},
     "Honeywell":           {"ticker": "HON",    "exchange": "NASDAQ", "currency": "USD"},
     "General Electric":    {"ticker": "GE",     "exchange": "NYSE",   "currency": "USD"},
+    "GE HealthCare":       {"ticker": "GEHC",   "exchange": "NASDAQ", "currency": "USD"},
     "Boeing":              {"ticker": "BA",     "exchange": "NYSE",   "currency": "USD"},
     "Huntington Ingalls":  {"ticker": "HII",    "exchange": "NYSE",   "currency": "USD"},
     "Huntington-Ingalls":  {"ticker": "HII",    "exchange": "NYSE",   "currency": "USD"},
@@ -135,22 +136,12 @@ KNOWN = {
     "Radware":             {"ticker": "RDWR",   "exchange": "NASDAQ", "currency": "USD"},
 }
 
-# Tickers to monitor for standalone insider activity
-# These are our highest conviction watchlist companies
 INSIDER_WATCHLIST = [
     "KTOS","MRCY","DRS","PSN","RKLB","VSEC","LDOS","BAH","SAIC",
     "CACI","LMT","NOC","RTX","GD","LHX","HII","TXT","KBR","TTEK",
-    "ACM","PLTR","HON","GE","BA","BWXT","CW","HEI","TGI","AJRD",
+    "ACM","PLTR","HON","GE","GEHC","BA","BWXT","CW","HEI","TGI","AJRD",
     "ICFI","MMS","MANT","SPR","KAMN","FLR","DXC","IBM","AMTM",
     "ESLT","CYBR","CHKP","NICE","RDWR",
-]
-
-# C-suite titles that matter
-INSIDER_TITLES = [
-    "chief executive", "ceo", "chief financial", "cfo",
-    "chief operating", "coo", "president", "chairman",
-    "chief technology", "cto", "director", "executive vice president",
-    "senior vice president",
 ]
 
 # =========================================================
@@ -246,9 +237,14 @@ def fmt_local(n, currency):
     if v >= 1e6: return f"{s}{v/1e6:.2f}M"
     return f"{s}{v/1e3:.0f}K"
 
+# ── Caches ────────────────────────────────────────────────
+_stock_cache    = {}
+_fx_cache       = {}
+STOCK_CACHE_TTL = 600
+FX_CACHE_TTL    = 3600
+
 def get_fx_rate(currency):
     if currency == "USD": return 1.0
-    # Check cache
     if currency in _fx_cache:
         rate, ts = _fx_cache[currency]
         if (datetime.now() - ts).seconds < FX_CACHE_TTL:
@@ -266,25 +262,40 @@ def get_fx_rate(currency):
         return {"GBP":1.27,"CAD":0.73,"ILS":0.27}.get(currency, 1.0)
 
 def get_stock_info(ticker):
-    # Check cache first
     if ticker in _stock_cache:
         price, cap, curr, exch, ts = _stock_cache[ticker]
         if (datetime.now() - ts).seconds < STOCK_CACHE_TTL:
             return price, cap, curr, exch
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
+        # Use quoteSummary for reliable marketCap — chart endpoint often omits it
+        url = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+               f"?modules=price")
         req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
-        meta  = data["chart"]["result"][0]["meta"]
-        price = meta.get("regularMarketPrice",0)
-        cap   = meta.get("marketCap",0)
-        curr  = meta.get("currency","USD")
-        exch  = meta.get("exchangeName","")
+        price_data = data["quoteSummary"]["result"][0]["price"]
+        price = price_data.get("regularMarketPrice",{}).get("raw", 0)
+        cap   = price_data.get("marketCap",{}).get("raw", 0)
+        curr  = price_data.get("currency","USD")
+        exch  = price_data.get("exchangeName","")
         _stock_cache[ticker] = (price, cap, curr, exch, datetime.now())
         return price, cap, curr, exch
     except:
-        return None, None, None, None
+        # Fallback to chart endpoint
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
+            req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read())
+            meta  = data["chart"]["result"][0]["meta"]
+            price = meta.get("regularMarketPrice",0)
+            cap   = meta.get("marketCap",0)
+            curr  = meta.get("currency","USD")
+            exch  = meta.get("exchangeName","")
+            _stock_cache[ticker] = (price, cap, curr, exch, datetime.now())
+            return price, cap, curr, exch
+        except:
+            return None, None, None, None
 
 # =========================================================
 # DEAL SCORING
@@ -320,13 +331,13 @@ def score_deal(amount_usd, market_cap, years, insider):
     elif years >= 2: score += 4;  reasons.append(f"{years:.0f} year contract")
     elif years >= 1: score += 2;  reasons.append(f"{years:.0f} year contract")
     if insider:
-        insider_lower = insider.lower() if insider else ""
+        insider_lower = insider.lower()
         if any(t in insider_lower for t in ["chief executive","ceo"]):
             score += 15; reasons.append("CEO open market buy — very high conviction signal")
         elif any(t in insider_lower for t in ["chief financial","cfo","chief operating","coo","president"]):
             score += 12; reasons.append("C-Suite open market buy — high conviction signal")
         else:
-            score += 8;  reasons.append("Director/Officer open market buy — positive signal")
+            score += 8; reasons.append("Director/Officer open market buy — positive signal")
     score = min(score, 100)
     if score >= 70:   rating = "STRONG BUY"
     elif score >= 50: rating = "HIGH VALUE"
@@ -350,7 +361,7 @@ def search_edgar(company_name):
             "search_text": "", "action": "getcompany"
         })
         url = f"https://www.sec.gov/cgi-bin/browse-edgar?{params}&output=atom"
-        req = urllib.request.Request(url, headers={"User-Agent":"contractbot@gmail.com"})
+        req = urllib.request.Request(url, headers={"User-Agent":"ContractAlertBot/2.0 admin@contractbot.app"})
         with urllib.request.urlopen(req, timeout=10) as r:
             content = r.read().decode("utf-8")
         matches = re.findall(r'\(([A-Z]{1,5})\)', content)
@@ -385,19 +396,6 @@ def find_company(name):
 
 # =========================================================
 # SEC INSIDER TRADING — PROPER XML PARSER
-#
-# Architecture:
-#   1. Search SEC EDGAR for recent Form 4 filings by ticker
-#   2. Get accession number for each filing
-#   3. Fetch the actual Form 4 XML document
-#   4. Parse structured fields:
-#      - transactionCode (P=purchase, S=sale, M=option, A=grant)
-#      - transactionShares
-#      - transactionPricePerShare
-#      - officerTitle / isDirector / isOfficer
-#      - directOrIndirectOwnership
-#   5. Filter for: P only, direct, C-suite, over threshold
-#   6. Cache parsed results to avoid re-fetching same filing
 # =========================================================
 
 SEC_HEADERS = {
@@ -405,17 +403,9 @@ SEC_HEADERS = {
     "Accept":     "application/json, text/html, application/xml",
 }
 
-# ── In-memory caches with TTL ─────────────────────────────────────────────────
-_stock_cache = {}   # ticker -> (price, cap, currency, exchange, timestamp)
-_fx_cache    = {}   # currency -> (rate, timestamp)
-STOCK_CACHE_TTL = 600   # 10 minutes
-FX_CACHE_TTL    = 3600  # 1 hour
+_insider_cache = {}
 
 def fetch_recent_form4s(ticker):
-    """
-    Step 1: Find recent Form 4 filings for a ticker via SEC EDGAR full-text search.
-    Returns list of {accession_number, filed_date, filer_name, cik}
-    """
     try:
         since = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
         today = datetime.now().strftime("%Y-%m-%d")
@@ -424,18 +414,14 @@ def fetch_recent_form4s(ticker):
         req = urllib.request.Request(url, headers=SEC_HEADERS)
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
-
         filings = []
         for hit in data.get("hits",{}).get("hits",[]):
             src = hit.get("_source",{})
-            acc = src.get("file_num","") or src.get("accession_no","")
-            # Convert accession number format: 0001234567-26-000123
-            raw_acc = hit.get("_id","")
             filings.append({
-                "accession":  raw_acc,
-                "filed":      src.get("file_date",""),
-                "filer":      src.get("display_names",["Unknown"])[0],
-                "cik":        src.get("entity_id",""),
+                "accession": hit.get("_id",""),
+                "filed":     src.get("file_date",""),
+                "filer":     src.get("display_names",["Unknown"])[0],
+                "cik":       src.get("entity_id",""),
             })
         return filings
     except Exception as e:
@@ -443,236 +429,98 @@ def fetch_recent_form4s(ticker):
         return []
 
 def get_form4_xml_url(accession_raw, cik):
-    """
-    Step 2: Build the XML URL directly from the accession number.
-
-    SEC URL structure:
-    /Archives/edgar/data/{CIK}/{accession_nodashes}/{accession_nodashes}-index.htm
-
-    We use the exact accession from the search result — no refetching.
-    Then find the XML document in the filing index.
-    """
     try:
-        # Normalize accession — strip dashes for URL path
-        acc_nodashes = accession_raw.replace("-", "").replace(":", "")
-        # Reformat with dashes for filename: 0001234567-26-000123
+        acc_nodashes = accession_raw.replace("-","").replace(":","")
         if len(acc_nodashes) == 18:
             acc_dashes = f"{acc_nodashes[:10]}-{acc_nodashes[10:12]}-{acc_nodashes[12:]}"
         else:
-            # Try to extract from raw string
             acc_dashes = re.sub(r'(\d{10})(\d{2})(\d{6})', r'\1-\2-\3', acc_nodashes)
-
-        # Build filing index URL directly
         idx_url = (f"https://www.sec.gov/Archives/edgar/data"
                    f"/{cik}/{acc_nodashes}/{acc_dashes}-index.htm")
-
         req = urllib.request.Request(idx_url, headers=SEC_HEADERS)
         with urllib.request.urlopen(req, timeout=10) as r:
             idx_html = r.read().decode("utf-8", errors="ignore")
-
-        # Find XML files in the index — prefer the primary document
         xml_links = re.findall(r'href="([^"]*\.xml)"', idx_html, re.IGNORECASE)
-
-        # Filter out XSLT/stylesheet files, prefer the main Form 4 XML
         for link in xml_links:
             lower = link.lower()
             if "xsl" in lower or "stylesheet" in lower:
                 continue
-            # Build absolute URL
-            if link.startswith("http"):
-                return link
-            elif link.startswith("/"):
-                return f"https://www.sec.gov{link}"
-            else:
-                return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodashes}/{link}"
-
+            if link.startswith("http"):   return link
+            elif link.startswith("/"):    return f"https://www.sec.gov{link}"
+            else: return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodashes}/{link}"
         return None
-
     except Exception as e:
         log.debug(f"XML URL lookup failed for {accession_raw}: {e}")
         return None
 
 def parse_form4_xml(xml_url, ticker, filer_name, filed_date):
-    """
-    Step 3: Parse the Form 4 XML and extract structured transaction data.
-    Returns list of validated insider buy signals.
-    """
     try:
         req = urllib.request.Request(xml_url, headers=SEC_HEADERS)
         with urllib.request.urlopen(req, timeout=10) as r:
             xml = r.read().decode("utf-8", errors="ignore")
-
-        signals = []
-
-        # Extract reporter info
+        signals      = []
         officer_title = ""
-        is_director   = False
-        is_officer    = False
-
-        title_match = re.search(r'<officerTitle>(.*?)</officerTitle>', xml, re.IGNORECASE)
-        if title_match:
-            officer_title = title_match.group(1).strip()
-
+        is_director  = False
+        is_officer   = False
+        title_match  = re.search(r'<officerTitle>(.*?)</officerTitle>', xml, re.IGNORECASE)
+        if title_match: officer_title = title_match.group(1).strip()
         dir_match = re.search(r'<isDirector>(.*?)</isDirector>', xml, re.IGNORECASE)
-        if dir_match:
-            is_director = dir_match.group(1).strip() in ("1","true","True")
-
+        if dir_match: is_director = dir_match.group(1).strip() in ("1","true","True")
         off_match = re.search(r'<isOfficer>(.*?)</isOfficer>', xml, re.IGNORECASE)
-        if off_match:
-            is_officer = off_match.group(1).strip() in ("1","true","True")
-
-        # Only process C-suite and directors
+        if off_match: is_officer = off_match.group(1).strip() in ("1","true","True")
         if not is_director and not is_officer:
             return []
-
         title_lower = officer_title.lower()
         is_csuite = any(t in title_lower for t in [
             "chief executive","ceo","chief financial","cfo",
             "chief operating","coo","president","chairman",
             "chief technology","cto","executive vice",
         ])
-        # Accept directors too but flag them differently
         role = "C-Suite" if is_csuite else "Director"
-
-        # Parse non-derivative transactions (actual stock purchases)
-        # Find all nonDerivativeTransaction blocks
         nd_blocks = re.findall(
             r'<nonDerivativeTransaction>(.*?)</nonDerivativeTransaction>',
             xml, re.DOTALL | re.IGNORECASE
         )
-
         for block in nd_blocks:
-            # Transaction code — P = open market purchase
             code_match = re.search(r'<transactionCode>(.*?)</transactionCode>', block, re.IGNORECASE)
             if not code_match or code_match.group(1).strip() != "P":
                 continue
-
-            # Direct ownership only (D = direct, I = indirect)
             ownership_match = re.search(r'<directOrIndirectOwnership>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
             if ownership_match and ownership_match.group(1).strip() == "I":
-                continue  # Skip indirect ownership
-
-            # Shares
+                continue
             shares_match = re.search(r'<transactionShares>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
             shares = 0
             if shares_match:
                 try: shares = float(shares_match.group(1).strip().replace(",",""))
-                except: shares = 0
-
-            # Price per share
+                except: pass
             price_match = re.search(r'<transactionPricePerShare>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
             price_per_share = 0
             if price_match:
                 try: price_per_share = float(price_match.group(1).strip().replace(",",""))
-                except: price_per_share = 0
-
-            # Calculate total value
+                except: pass
             total_value = shares * price_per_share
             if total_value < MIN_INSIDER_BUY_USD:
                 continue
-
-            # Security type
             sec_match = re.search(r'<securityTitle>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
             security = sec_match.group(1).strip() if sec_match else "Common Stock"
-
             signals.append({
-                "ticker":        ticker,
-                "insider":       filer_name,
-                "title":         officer_title or role,
-                "role":          role,
-                "shares":        int(shares),
-                "price":         price_per_share,
-                "amount":        total_value,
-                "security":      security,
-                "filed":         filed_date,
-                "uid":           f"INSIDER:{ticker}:{filer_name}:{filed_date}:{total_value:.0f}",
+                "ticker":   ticker,
+                "insider":  filer_name,
+                "title":    officer_title or role,
+                "role":     role,
+                "shares":   int(shares),
+                "price":    price_per_share,
+                "amount":   total_value,
+                "security": security,
+                "filed":    filed_date,
+                "uid":      f"INSIDER:{ticker}:{filer_name}:{filed_date}:{total_value:.0f}",
             })
-
         return signals
-
     except Exception as e:
         log.debug(f"Form4 XML parse failed for {xml_url}: {e}")
         return []
 
-# Cache for parsed Form 4 results to avoid re-fetching
-_insider_cache = {}  # uid -> parsed result
-
-def check_insider_buys():
-    """
-    Scan all watchlist tickers for significant insider buys.
-    Uses proper SEC XML parsing for accuracy.
-    """
-    log.info("Checking insider activity across watchlist...")
-    alerts_sent = 0
-
-    for ticker in INSIDER_WATCHLIST:
-        try:
-            # Step 1: Find recent Form 4 filings
-            filings = fetch_recent_form4s(ticker)
-            if not filings:
-                time.sleep(0.5)
-                continue
-
-            for filing in filings[:3]:  # Check last 3 filings max
-                acc      = filing["accession"]
-                filed    = filing["filed"]
-                filer    = filing["filer"]
-                cik      = filing["cik"]
-
-                # Check cache first
-                cache_key = f"{ticker}:{acc}"
-                if cache_key in _insider_cache:
-                    signals = _insider_cache[cache_key]
-                else:
-                    # Step 2: Get XML URL
-                    xml_url = get_form4_xml_url(acc, cik)
-                    if not xml_url:
-                        _insider_cache[cache_key] = []
-                        time.sleep(0.5)
-                        continue
-
-                    # Step 3: Parse XML
-                    signals = parse_form4_xml(xml_url, ticker, filer, filed)
-                    _insider_cache[cache_key] = signals
-                    time.sleep(0.5)  # Respectful delay for SEC servers
-
-                # Step 4: Alert on new significant buys
-                for signal in signals:
-                    uid = signal["uid"]
-                    if already_seen_insider(uid):
-                        continue
-
-                    log.info(f"INSIDER BUY ★ ${ticker} | {signal['insider']} ({signal['title']}) | "
-                             f"{fmt_usd(signal['amount'])} | {signal['shares']:,} shares @ ${signal['price']:.2f}")
-
-                    stock_price, cap, currency, exchange = get_stock_info(ticker)
-
-                    try:
-                        send_insider_push(
-                            ticker, signal["insider"], signal["title"],
-                            signal["role"], signal["shares"], signal["price"],
-                            signal["amount"], signal["security"], filed,
-                            price, cap, exchange
-                        )
-                        alerts_sent += 1
-                    except Exception as e:
-                        log.error(f"Insider push failed for {ticker}: {e}")
-
-                    mark_seen_insider(uid, ticker, signal["insider"], signal["title"], signal["amount"])
-
-        except Exception as e:
-            log.debug(f"Insider check failed for {ticker}: {e}")
-
-        time.sleep(0.5)  # Respectful rate limiting
-
-    log.info(f"Insider check done — {alerts_sent} alerts sent")
-
 def get_insider_buys(ticker):
-    """
-    Lightweight version for contract cross-reference.
-    Returns a note string if recent insider buys found, else None.
-    Only uses cache — does not make new network calls during contract checks.
-    """
     try:
         for cache_key, signals in _insider_cache.items():
             if cache_key.startswith(f"{ticker}:") and signals:
@@ -684,16 +532,59 @@ def get_insider_buys(ticker):
     except:
         return None
 
+def check_insider_buys():
+    log.info("Checking insider activity across watchlist...")
+    alerts_sent = 0
+    for ticker in INSIDER_WATCHLIST:
+        try:
+            filings = fetch_recent_form4s(ticker)
+            if not filings:
+                time.sleep(0.5)
+                continue
+            for filing in filings[:3]:
+                acc      = filing["accession"]
+                filed    = filing["filed"]
+                filer    = filing["filer"]
+                cik      = filing["cik"]
+                cache_key = f"{ticker}:{acc}"
+                if cache_key in _insider_cache:
+                    signals = _insider_cache[cache_key]
+                else:
+                    xml_url = get_form4_xml_url(acc, cik)
+                    if not xml_url:
+                        _insider_cache[cache_key] = []
+                        time.sleep(0.5)
+                        continue
+                    signals = parse_form4_xml(xml_url, ticker, filer, filed)
+                    _insider_cache[cache_key] = signals
+                    time.sleep(0.5)
+                for signal in signals:
+                    uid = signal["uid"]
+                    if already_seen_insider(uid):
+                        continue
+                    log.info(f"INSIDER BUY ★ ${ticker} | {signal['insider']} ({signal['title']}) | "
+                             f"{fmt_usd(signal['amount'])} | {signal['shares']:,} shares @ ${signal['price']:.2f}")
+                    stock_price, cap, currency, exchange = get_stock_info(ticker)
+                    try:
+                        send_insider_push(
+                            ticker, signal["insider"], signal["title"],
+                            signal["role"], signal["shares"], signal["price"],
+                            signal["amount"], signal["security"], filed,
+                            stock_price, cap, exchange
+                        )
+                        alerts_sent += 1
+                    except Exception as e:
+                        log.error(f"Insider push failed for {ticker}: {e}")
+                    mark_seen_insider(uid, ticker, signal["insider"], signal["title"], signal["amount"])
+        except Exception as e:
+            log.debug(f"Insider check failed for {ticker}: {e}")
+        time.sleep(0.5)
+    log.info(f"Insider check done — {alerts_sent} alerts sent")
+
 # =========================================================
-# FETCH DoD — war.gov DIRECT (real time, 5pm Eastern daily)
-# war.gov uses JavaScript rendering so we can't scrape the listing page.
-# Instead we brute-force try article IDs around today's expected range.
-# Known IDs: May19=4496137, May20=4496900, May21=4498916, May22=4499778
-# IDs increase by ~800-2000 per day
+# FETCH DoD — war.gov DIRECT
 # =========================================================
 
-# Known war.gov article IDs — bot updates this automatically
-# Format: "YYYY-MM-DD": article_id
 WAR_GOV_KNOWN = {
     "2026-05-19": 4496137,
     "2026-05-20": 4496900,
@@ -704,30 +595,19 @@ WAR_GOV_KNOWN = {
 }
 
 def get_dod_article(dt, headers):
-    """
-    Find and fetch the war.gov contract page for a given date.
-    Uses binary search around estimated ID — max 10 requests.
-    """
-    used_date = dt.strftime("%Y-%m-%d")
-    date_slug = dt.strftime("%B-%-d-%Y").lower()
-
-    # Calculate estimated ID using linear regression on known IDs
+    used_date  = dt.strftime("%Y-%m-%d")
+    date_slug  = dt.strftime("%B-%-d-%Y").lower()
     known_dates = sorted(WAR_GOV_KNOWN.keys())
     if known_dates:
         last_known_date = known_dates[-1]
         last_known_id   = WAR_GOV_KNOWN[last_known_date]
         days_diff = (dt - datetime.strptime(last_known_date, "%Y-%m-%d")).days
-        # Average 900 IDs per day
-        estimated_id = last_known_id + (days_diff * 900)
+        estimated_id = last_known_id + (days_diff * 450)
     else:
         estimated_id = 4503000
-
-    # Try IDs in expanding steps from estimate — fast binary approach
-    # Try: estimate, estimate±500, estimate±1000, estimate±1500, estimate±2000
     candidates = [estimated_id]
     for step in [200, 400, 600, 800, 1000, 1500, 2000, 2500, 3000]:
         candidates.extend([estimated_id + step, estimated_id - step])
-
     for article_id in candidates:
         if article_id < 4000000: continue
         url = f"https://www.war.gov/News/Contracts/Contract/Article/{article_id}/contracts-for-{date_slug}/"
@@ -736,17 +616,14 @@ def get_dod_article(dt, headers):
             with urllib.request.urlopen(req, timeout=6) as r:
                 html = r.read().decode("utf-8", errors="ignore")
             if "was awarded" in html.lower() or "is awarded" in html.lower():
-                # Update our known IDs
                 WAR_GOV_KNOWN[used_date] = article_id
                 log.info(f"DoD: found article {article_id} for {used_date}")
                 return article_id, html
         except:
             continue
-
     return None, None
 
 def parse_dod_contracts(article_id, used_date, article):
-    """Parse contract awards from a war.gov article page."""
     results   = []
     seen_uids = set()
     award_pattern = re.compile(
@@ -773,18 +650,12 @@ def parse_dod_contracts(article_id, used_date, article):
         end  = min(len(article), match.end() + 500)
         desc = re.sub(r'<[^>]+>', '', article[match.end():end]).strip()[:200]
         results.append({
-            "id":         uid,
-            "recipient":  company,
-            "amount":     amount,
-            "amount_usd": amount,
-            "currency":   "USD",
-            "agency":     "Department of Defense",
-            "desc":       desc,
-            "awarded":    used_date,
-            "expires":    "",
-            "location":   "USA",
-            "country":    "USA",
-            "source":     "war.gov (DoD — Real Time)",
+            "id": uid, "recipient": company,
+            "amount": amount, "amount_usd": amount,
+            "currency": "USD", "agency": "Department of Defense",
+            "desc": desc, "awarded": used_date, "expires": "",
+            "location": "USA", "country": "USA",
+            "source": "war.gov (DoD — Real Time)",
         })
     return results
 
@@ -796,7 +667,6 @@ def fetch_dod_awards():
             "Accept":     "text/html,application/xhtml+xml",
         }
         results = []
-
         for dt in [today, today - timedelta(days=1)]:
             used_date = dt.strftime("%Y-%m-%d")
             cutoff    = (today - timedelta(days=2)).strftime("%Y-%m-%d")
@@ -809,16 +679,14 @@ def fetch_dod_awards():
                 results.extend(contracts)
             else:
                 log.info(f"DoD: no contracts found for {used_date}")
-
         log.info(f"DoD: {len(results)} total contracts")
         return results
-
     except Exception as e:
         log.warning(f"DoD fetch failed: {e}")
         return []
 
 # =========================================================
-# FETCH USA — USASpending.gov (comprehensive, 1-2 day delay)
+# FETCH USA
 # =========================================================
 
 def fetch_us_awards():
@@ -861,7 +729,7 @@ def fetch_us_awards():
     return results
 
 # =========================================================
-# FETCH UK — Contracts Finder (direct)
+# FETCH UK
 # =========================================================
 
 def fetch_uk_awards():
@@ -897,7 +765,7 @@ def fetch_uk_awards():
         return []
 
 # =========================================================
-# FETCH CANADA — CanadaBuys direct CSV
+# FETCH CANADA
 # =========================================================
 
 def fetch_canada_awards():
@@ -947,7 +815,7 @@ def fetch_canada_awards():
         return []
 
 # =========================================================
-# FETCH ISRAEL — OpenBudget direct API
+# FETCH ISRAEL
 # =========================================================
 
 def fetch_israel_awards():
@@ -986,7 +854,7 @@ def fetch_israel_awards():
 # PUSH — CONTRACT ALERT
 # =========================================================
 
-def send_push(award, ticker, exchange, stock_currency, price,
+def send_push(award, ticker, exchange, stock_currency, stock_price,
               cap_raw, amount_usd, insider, deal_score, rating, reasons):
     recipient  = award.get("recipient","Unknown")
     currency   = award.get("currency","USD")
@@ -1020,9 +888,9 @@ def send_push(award, ticker, exchange, stock_currency, price,
     lines += [f"Agency   : {agency}", f"Country  : {country}", f"What     : {desc}",
               "━━━━━━━━━━━━━━━━━━━━", "STOCK",
               f"Exchange : {exchange}", f"Ticker   : {ticker}"]
-    if price:   lines.append(f"Price    : {price:.2f} {stock_currency or ''}")
-    if cap_str: lines.append(f"Mkt Cap  : {cap_str}")
-    if pct_str: lines.append(f"Impact   : {pct_str}")
+    if stock_price: lines.append(f"Price    : {stock_price:.2f} {stock_currency or ''}")
+    if cap_str:     lines.append(f"Mkt Cap  : {cap_str}")
+    if pct_str:     lines.append(f"Impact   : {pct_str}")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append("WHY THIS MATTERS")
     for r in reasons: lines.append(f"• {r}")
@@ -1047,33 +915,53 @@ def send_push(award, ticker, exchange, stock_currency, price,
 # PUSH — INSIDER BUY ALERT
 # =========================================================
 
-def send_insider_push(ticker, insider, title, role, shares, price_paid, amount, security, filed, stock_price, cap, exchange):
+def send_insider_push(ticker, insider, title, role, shares, price_paid,
+                      amount, security, filed, stock_price, cap, exchange):
     cap_str    = fmt_usd(cap) if cap else "Unknown"
     alerted_at = datetime.now().strftime("%b %d %Y at %I:%M %p")
-    title      = f"🔔 INSIDER BUY | ${ticker}"
-
+    push_title = f"🔔 INSIDER BUY | ${ticker} | {role}"
+    title_lower = (title or "").lower()
+    if any(t in title_lower for t in ["chief executive","ceo"]):
+        confidence = "VERY HIGH — CEO open market purchase"
+        priority   = "urgent"
+    elif any(t in title_lower for t in ["chief","president"]):
+        confidence = "HIGH — C-Suite open market purchase"
+        priority   = "high"
+    else:
+        confidence = "MODERATE — Director open market purchase"
+        priority   = "default"
     lines = [
+        f"CONFIDENCE: {confidence}",
         "━━━━━━━━━━━━━━━━━━━━",
-        "INSIDER BUY DETECTED",
-        f"Ticker   : ${ticker}",
+        "INSIDER TRANSACTION",
         f"Insider  : {insider}",
-        f"Amount   : {fmt_usd(amount)}",
+        f"Title    : {title}",
+        f"Type     : Open market purchase (Code P)",
+        f"Shares   : {shares:,}",
+        f"Paid     : ${price_paid:.2f} per share",
+        f"Total    : {fmt_usd(amount)}",
+        f"Security : {security}",
         f"Filed    : {filed}",
-        f"Type     : Open market purchase",
         "━━━━━━━━━━━━━━━━━━━━",
-        "STOCK",
+        "STOCK NOW",
+        f"Ticker   : ${ticker}",
         f"Exchange : {exchange or 'NYSE/NASDAQ'}",
     ]
-    if price: lines.append(f"Price    : ${price:.2f}")
-    if cap_str: lines.append(f"Mkt Cap  : {cap_str}")
+    if stock_price: lines.append(f"Price    : ${stock_price:.2f}")
+    if cap_str:     lines.append(f"Mkt Cap  : {cap_str}")
+    if stock_price and price_paid and price_paid > 0:
+        change = ((stock_price - price_paid) / price_paid) * 100
+        lines.append(f"vs Buy   : {change:+.1f}% since purchase")
     lines += [
         "━━━━━━━━━━━━━━━━━━━━",
         "WHY THIS MATTERS",
-        f"• Executive bought {fmt_usd(amount)} of own stock",
-        "• Insiders only buy when they expect price to rise",
-        "• Watch for contract announcement to follow",
+        f"• {role} bought {fmt_usd(amount)} of own stock",
+        "• Open market purchase — personal cash, not options",
+        "• Direct ownership — skin in the game",
+        "• Insiders buy for one reason: they expect price to rise",
+        "• Cross-reference with recent contract activity",
         "━━━━━━━━━━━━━━━━━━━━",
-        "Source   : SEC EDGAR Form 4",
+        "Source   : SEC EDGAR Form 4 (XML parsed)",
         f"Alert    : {alerted_at}",
     ]
     body = "\n".join(lines)
@@ -1081,15 +969,15 @@ def send_insider_push(ticker, insider, title, role, shares, price_paid, amount, 
         f"https://ntfy.sh/{NTFY_TOPIC}",
         data=body.encode(),
         headers={
-            "Title":    title,
-            "Priority": "high",
+            "Title":    push_title,
+            "Priority": priority,
             "Tags":     "chart_with_upwards_trend,eyes",
             "Click":    f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=4&dateb=&owner=include&count=10",
         },
         method="POST",
     )
     retry(lambda: urllib.request.urlopen(req, timeout=10).close())
-    log.info(f"  Insider push sent: ${ticker} — {insider} — {fmt_usd(amount)}")
+    log.info(f"  Insider push: ${ticker} — {insider} ({title}) — {fmt_usd(amount)}")
 
 # =========================================================
 # TEST PUSH
@@ -1115,7 +1003,6 @@ def send_test_push():
 def check():
     log.info("─" * 55)
     log.info(f"Checking all markets — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
     all_awards = []
     for name, fn in [("DoD/war.gov", fetch_dod_awards),
                      ("USA",         fetch_us_awards),
@@ -1128,9 +1015,7 @@ def check():
             all_awards.extend(awards)
         except Exception as e:
             log.error(f"{name} fetch failed: {e}")
-
     log.info(f"Total fetched: {len(all_awards)}")
-
     new_count = 0
     for award in all_awards:
         uid = f"{award['country']}:{award['id']}:{award['amount']}"
@@ -1140,34 +1025,24 @@ def check():
             mark_seen(uid, award, award.get("amount_usd",0), award["country"], "", "", 0)
             continue
         amount_usd = award.get("amount_usd", award["amount"])
-        price, cap_raw, stock_currency, _ = get_stock_info(ticker)
-
-        # Check if this ticker has recent insider buys — bonus signal
-        insider_note = get_insider_buys(ticker)  # returns string or None
-
+        stock_price, cap_raw, stock_currency, _ = get_stock_info(ticker)
+        insider_note = get_insider_buys(ticker)
         years = get_contract_years(award.get("awarded",""), award.get("expires",""))
         deal_score, rating, reasons = score_deal(amount_usd, cap_raw, years, insider_note)
-
         log.info(f"NEW ★ [{award['country']}] {award['recipient']} | "
                  f"{fmt_usd(amount_usd)} | ${ticker} | Score: {deal_score}/100 [{rating}]")
-
         if deal_score < MIN_DEAL_SCORE:
             log.info(f"  Skipped — score {deal_score} below minimum {MIN_DEAL_SCORE}")
             mark_seen(uid, award, amount_usd, award["country"], ticker, exchange, deal_score)
             continue
-
         try:
-            send_push(award, ticker, exchange, stock_currency, price,
+            send_push(award, ticker, exchange, stock_currency, stock_price,
                       cap_raw, amount_usd, insider_note, deal_score, rating, reasons)
         except Exception as e:
             log.error(f"Push failed: {e}")
-
         mark_seen(uid, award, amount_usd, award["country"], ticker, exchange, deal_score)
         new_count += 1
-
     log.info(f"Done — {new_count} new contract alerts sent")
-
-    # Check insider buys independently
     try:
         check_insider_buys()
     except Exception as e:
