@@ -707,7 +707,7 @@ def fetch_dod_awards():
 
 def fetch_us_awards():
     end   = datetime.now()
-    start = end - timedelta(hours=LOOKBACK_HOURS)
+    start = end - timedelta(hours=48)  # wider window catches DoD batch uploads
     payload = json.dumps({
         "filters": {
             "award_type_codes": ["A","B","C","D"],
@@ -1024,8 +1024,7 @@ def check():
     log.info("─" * 55)
     log.info(f"Checking all markets — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     all_awards = []
-    for name, fn in [("DoD/war.gov", fetch_dod_awards),
-                     ("USA",         fetch_us_awards),
+    for name, fn in [("USA",         fetch_us_awards),
                      ("UK",          fetch_uk_awards),
                      ("Canada",      fetch_canada_awards),
                      ("Israel",      fetch_israel_awards)]:
@@ -1078,7 +1077,9 @@ def run_bot():
         try:
             check()
         except Exception as e:
+            import traceback
             log.error(f"Check error: {e}")
+            log.error(traceback.format_exc())
         log.info(f"Sleeping {CHECK_MINUTES} minutes until next check...")
         time.sleep(CHECK_MINUTES * 60)
 
