@@ -810,54 +810,61 @@ def send_push(award, ticker, exchange, stock_currency, stock_price,
               cap_raw, amount_usd, insider, deal_score, rating, reasons):
     recipient  = award.get("recipient","Unknown")
     currency   = award.get("currency","USD")
-    amount_loc = fmt_local(award.get("amount",0), currency)
-    awarded    = award.get("awarded","Unknown")
-    expires    = award.get("expires","")
     agency     = award.get("agency","")
-    desc       = award.get("desc","")[:150]
     country    = award.get("country","")
     source     = award.get("source","")
     award_id   = award.get("id","")
-    alerted_at = datetime.now().strftime("%b %d %Y at %I:%M %p")
+    awarded    = award.get("awarded","")
+    expires    = award.get("expires","")
+    desc       = award.get("desc","")[:100]
     amt_val    = float(amount_usd or 0)
+    alerted_at = datetime.now().strftime("%b %d %Y at %I:%M %p")
+
     if deal_score >= 70:   priority = "urgent"
     elif deal_score >= 40: priority = "high"
     else:                  priority = "default"
-    title   = f"[{rating}] ${ticker} | {recipient}" if ticker else f"[{rating}] {recipient}"
-    cap_str = fmt_usd(cap_raw) if cap_raw else "Unknown"
-    pct_str = f"{(amt_val/cap_raw)*100:.1f}% of market cap" if cap_raw and cap_raw > 0 else ""
-    lines = [
-        f"DEAL SCORE: {deal_score}/100 — {rating}",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "CONTRACT",
-        f"Value    : {amount_loc} ({fmt_usd(amount_usd)} USD)",
-        f"Awarded  : {awarded}",
-    ]
-    if expires:
-        lines.append(f"Expires  : {expires}")
-        years = get_contract_years(awarded, expires)
-        if years > 0: lines.append(f"Duration : {years:.1f} years")
-    lines += [f"Agency   : {agency}", f"Country  : {country}", f"What     : {desc}",
-              "━━━━━━━━━━━━━━━━━━━━", "STOCK",
-              f"Exchange : {exchange}", f"Ticker   : {ticker}"]
-    if stock_price: lines.append(f"Price    : {stock_price:.2f} {stock_currency or ''}")
-    if cap_str:     lines.append(f"Mkt Cap  : {cap_str}")
-    if pct_str:     lines.append(f"Impact   : {pct_str}")
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
-    lines.append("WHY THIS MATTERS")
-    for r in reasons: lines.append(f"• {r}")
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
-    if insider: lines += ["INSIDER ACTIVITY", insider, "━━━━━━━━━━━━━━━━━━━━"]
-    lines += [f"Source   : {source}", f"Alert    : {alerted_at}"]
-    body = "\n".join(lines)
+
+    # Clean company name — strip federal/government suffixes
+    name = recipient
+    for suffix in [", INC.", ", LLC", ", L.P.", " INC", " LLC", " CORP",
+                   " FEDERAL", " FEDERAL SERVICES", " GOVERNMENT SERVICES",
+                   " SYSTEMS CORPORATION", " INFORMATION TECHNOLOGY, INC."]:
+        name = name.replace(suffix, "")
+    name = name.strip().title()
+
+    # Card title — shown as notification header
+    title = f"💰 {fmt_usd(amount_usd)} — {name} (${ticker})"
+
+    # Impact line
+    cap_str = fmt_usd(cap_raw) if cap_raw and cap_raw > 0 else None
+    pct_str = f"{(amt_val/cap_raw)*100:.1f}% of mkt cap" if cap_raw and cap_raw > 0 else None
+
+    # Duration
+    years = get_contract_years(awarded, expires)
+    dur_str = f"{years:.0f}yr contract" if expires and years >= 1 else ""
+
+    # Build clean 3-line body
+    line1 = f"📋 {agency} • {country}"
+    line2_parts = [f"🎯 Score: {deal_score}/100 {rating}"]
+    if pct_str: line2_parts.append(pct_str)
+    if dur_str: line2_parts.append(dur_str)
+    line2 = " • ".join(line2_parts)
+
+    # Optional line 3 — insider activity
+    line3 = f"🔔 + INSIDER BUY active" if insider else ""
+
+    body = line1 + "\n" + line2
+    if line3: body += "\n" + line3
+
     if country == "USA":  link = f"https://www.usaspending.gov/award/{award_id}"
     elif country == "UK": link = f"https://www.contractsfinder.service.gov.uk/Notice/{award_id}"
     else:                 link = "https://www.usaspending.gov"
+
     req = urllib.request.Request(
         f"https://ntfy.sh/{NTFY_TOPIC}",
         data=body.encode(),
         headers={"Title":title,"Priority":priority,
-                 "Tags":"money_bag,chart_with_upwards_trend","Click":link},
+                 "Tags":"money_bag","Click":link},
         method="POST",
     )
     retry(lambda: urllib.request.urlopen(req, timeout=10).close())
@@ -869,67 +876,46 @@ def send_push(award, ticker, exchange, stock_currency, stock_price,
 
 def send_insider_push(ticker, insider, title, role, shares, price_paid,
                       amount, security, filed, stock_price, cap, exchange):
-    cap_str    = fmt_usd(cap) if cap else "Unknown"
-    alerted_at = datetime.now().strftime("%b %d %Y at %I:%M %p")
-    push_title = f"🔔 INSIDER BUY | ${ticker} | {role}"
     title_lower = (title or "").lower()
     if any(t in title_lower for t in ["chief executive","ceo"]):
-        confidence = "VERY HIGH — CEO open market purchase"
-        priority   = "urgent"
+        priority = "urgent"
     elif any(t in title_lower for t in ["chief","president"]):
-        confidence = "HIGH — C-Suite open market purchase"
-        priority   = "high"
+        priority = "high"
     else:
-        confidence = "MODERATE — Director open market purchase"
-        priority   = "default"
-    lines = [
-        f"CONFIDENCE: {confidence}",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "INSIDER TRANSACTION",
-        f"Insider  : {insider}",
-        f"Title    : {title}",
-        f"Type     : Open market purchase (Code P)",
-        f"Shares   : {shares:,}",
-        f"Paid     : ${price_paid:.2f} per share",
-        f"Total    : {fmt_usd(amount)}",
-        f"Security : {security}",
-        f"Filed    : {filed}",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "STOCK NOW",
-        f"Ticker   : ${ticker}",
-        f"Exchange : {exchange or 'NYSE/NASDAQ'}",
-    ]
-    if stock_price: lines.append(f"Price    : ${stock_price:.2f}")
-    if cap_str:     lines.append(f"Mkt Cap  : {cap_str}")
+        priority = "default"
+
+    # Clean insider name to First Last format
+    name_parts = insider.split()
+    clean_name = " ".join(name_parts[:2]) if len(name_parts) >= 2 else insider
+
+    # Card title
+    push_title = f"🚨 INSIDER BUY — ${ticker}"
+
+    # 3-line body
+    line1 = f"{clean_name} ({title or role})"
+    line2 = f"{shares:,} shares @ ${price_paid:.2f} = {fmt_usd(amount)}"
+    line3_parts = []
+    if stock_price: line3_parts.append(f"Stock now ${stock_price:.2f}")
     if stock_price and price_paid and price_paid > 0:
         change = ((stock_price - price_paid) / price_paid) * 100
-        lines.append(f"vs Buy   : {change:+.1f}% since purchase")
-    lines += [
-        "━━━━━━━━━━━━━━━━━━━━",
-        "WHY THIS MATTERS",
-        f"• {role} bought {fmt_usd(amount)} of own stock",
-        "• Open market purchase — personal cash, not options",
-        "• Direct ownership — skin in the game",
-        "• Insiders buy for one reason: they expect price to rise",
-        "• Cross-reference with recent contract activity",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "Source   : SEC EDGAR Form 4 (XML parsed)",
-        f"Alert    : {alerted_at}",
-    ]
-    body = "\n".join(lines)
+        line3_parts.append(f"{change:+.1f}% since buy")
+    line3 = " • ".join(line3_parts) if line3_parts else f"Filed {filed}"
+
+    body = line1 + "\n" + line2 + "\n" + line3
+
     req = urllib.request.Request(
         f"https://ntfy.sh/{NTFY_TOPIC}",
         data=body.encode(),
         headers={
             "Title":    push_title,
             "Priority": priority,
-            "Tags":     "chart_with_upwards_trend,eyes",
+            "Tags":     "rotating_light",
             "Click":    f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=4&dateb=&owner=include&count=10",
         },
         method="POST",
     )
     retry(lambda: urllib.request.urlopen(req, timeout=10).close())
-    log.info(f"  Insider push: ${ticker} — {insider} ({title}) — {fmt_usd(amount)}")
+    log.info(f"  Insider push: ${ticker} — {clean_name} ({title}) — {fmt_usd(amount)}")
 
 # =========================================================
 # TEST PUSH
@@ -939,8 +925,8 @@ def send_test_push():
     try:
         req = urllib.request.Request(
             f"https://ntfy.sh/{NTFY_TOPIC}",
-            data="Contract Bot live. Monitoring USASpending, UK, Canada, Israel + insider buys.".encode(),
-            headers={"Title":"Contract Bot Started","Priority":"default","Tags":"white_check_mark"},
+            data="Monitoring USASpending • UK • Canada • Israel • SEC insider buys".encode(),
+            headers={"Title":"🤖 Contract Bot Live","Priority":"default","Tags":"white_check_mark"},
             method="POST",
         )
         urllib.request.urlopen(req, timeout=10).close()
