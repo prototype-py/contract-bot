@@ -592,22 +592,34 @@ WAR_GOV_KNOWN = {
     "2026-05-22": 4499778,
     "2026-05-26": 4500905,
     "2026-05-27": 4502028,
+    "2026-05-28": 4503104,
+    "2026-05-29": 4504163,
 }
 
 def get_dod_article(dt, headers):
     used_date  = dt.strftime("%Y-%m-%d")
     date_slug  = dt.strftime("%B-%-d-%Y").lower()
     known_dates = sorted(WAR_GOV_KNOWN.keys())
-    if known_dates:
-        last_known_date = known_dates[-1]
-        last_known_id   = WAR_GOV_KNOWN[last_known_date]
-        days_diff = (dt - datetime.strptime(last_known_date, "%Y-%m-%d")).days
-        estimated_id = last_known_id + (days_diff * 450)
+
+    # Calculate average daily ID increment from all known data points
+    if len(known_dates) >= 2:
+        first_date = datetime.strptime(known_dates[0], "%Y-%m-%d")
+        last_date  = datetime.strptime(known_dates[-1], "%Y-%m-%d")
+        total_days = (last_date - first_date).days
+        total_ids  = WAR_GOV_KNOWN[known_dates[-1]] - WAR_GOV_KNOWN[known_dates[0]]
+        daily_rate = total_ids / total_days if total_days > 0 else 700
+        last_known_id   = WAR_GOV_KNOWN[known_dates[-1]]
+        days_diff = (dt - last_date).days
+        estimated_id = int(last_known_id + (days_diff * daily_rate))
     else:
-        estimated_id = 4503000
+        estimated_id = 4505000
+
+    # Wide search range — ±4000 in steps of 100
     candidates = [estimated_id]
-    for step in [200, 400, 600, 800, 1000, 1500, 2000, 2500, 3000]:
-        candidates.extend([estimated_id + step, estimated_id - step])
+    for step in range(100, 4000, 100):
+        candidates.append(estimated_id + step)
+        candidates.append(estimated_id - step)
+    first_error = None
     for article_id in candidates:
         if article_id < 4000000: continue
         url = f"https://www.war.gov/News/Contracts/Contract/Article/{article_id}/contracts-for-{date_slug}/"
@@ -619,8 +631,12 @@ def get_dod_article(dt, headers):
                 WAR_GOV_KNOWN[used_date] = article_id
                 log.info(f"DoD: found article {article_id} for {used_date}")
                 return article_id, html
-        except:
+        except Exception as e:
+            if first_error is None:
+                first_error = str(e)
             continue
+    if first_error:
+        log.warning(f"DoD fetch error for {used_date}: {first_error}")
     return None, None
 
 def parse_dod_contracts(article_id, used_date, article):
@@ -704,29 +720,33 @@ def fetch_us_awards():
                    "Place of Performance City Name","Place of Performance State Code"],
         "sort": "Award Amount", "order": "desc", "limit": 100, "page": 1,
     }).encode()
-    req = urllib.request.Request(
-        "https://api.usaspending.gov/api/v2/search/spending_by_award/",
-        data=payload,
-        headers={"Content-Type":"application/json","User-Agent":"ContractBot/1.0"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        data = json.loads(r.read())
-    results = []
-    for a in data.get("results", []):
-        results.append({
-            "id": a.get("Award ID",""), "recipient": a.get("Recipient Name",""),
-            "amount": float(a.get("Award Amount") or 0),
-            "amount_usd": float(a.get("Award Amount") or 0),
-            "currency": "USD", "agency": a.get("Awarding Agency",""),
-            "desc": (a.get("Description") or "")[:200],
-            "awarded": a.get("Start Date",""), "expires": a.get("End Date",""),
-            "location": ", ".join(filter(None,[
-                a.get("Place of Performance City Name",""),
-                a.get("Place of Performance State Code","")])),
-            "country": "USA", "source": "USASpending.gov",
-        })
-    return results
+    try:
+        req = urllib.request.Request(
+            "https://api.usaspending.gov/api/v2/search/spending_by_award/",
+            data=payload,
+            headers={"Content-Type":"application/json","User-Agent":"ContractBot/1.0"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+        results = []
+        for a in data.get("results", []):
+            results.append({
+                "id": a.get("Award ID",""), "recipient": a.get("Recipient Name",""),
+                "amount": float(a.get("Award Amount") or 0),
+                "amount_usd": float(a.get("Award Amount") or 0),
+                "currency": "USD", "agency": a.get("Awarding Agency",""),
+                "desc": (a.get("Description") or "")[:200],
+                "awarded": a.get("Start Date",""), "expires": a.get("End Date",""),
+                "location": ", ".join(filter(None,[
+                    a.get("Place of Performance City Name",""),
+                    a.get("Place of Performance State Code","")])),
+                "country": "USA", "source": "USASpending.gov",
+            })
+        return results
+    except Exception as e:
+        log.warning(f"USASpending fetch failed: {e}")
+        return []
 
 # =========================================================
 # FETCH UK
