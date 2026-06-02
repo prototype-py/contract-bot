@@ -931,8 +931,8 @@ def send_push(award, ticker, exchange, stock_currency, stock_price,
         name = name.replace(suffix, "")
     name = name.strip().title()
 
-    # Card title — shown as notification header (ASCII only)
-    title = f"{fmt_usd(amount_usd)} - {name} (${ticker}) [{rating}]"
+    # Card title — rating first, then ticker and amount
+    title = f"[{rating}] ${ticker} - {fmt_usd(amount_usd)}"
     title = title.encode("ascii", errors="ignore").decode("ascii")
 
     # Impact line
@@ -958,9 +958,12 @@ def send_push(award, ticker, exchange, stock_currency, stock_price,
     # Sanitize special unicode chars that break latin-1 encoding
     body = body.replace("\u2014", "-").replace("\u2013", "-").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
 
-    if country == "USA":  link = f"https://www.usaspending.gov/award/{award_id}"
-    elif country == "UK": link = f"https://www.contractsfinder.service.gov.uk/Notice/{award_id}"
-    else:                 link = "https://www.usaspending.gov"
+    # Build click link — Google search is most reliable across all sources
+    q = urllib.parse.quote(f"{recipient} {agency} contract {awarded}")
+    if country == "UK" and award_id:
+        link = f"https://www.contractsfinder.service.gov.uk/Notice/{award_id}"
+    else:
+        link = f"https://www.google.com/search?q={q}"
 
     req = urllib.request.Request(
         f"https://ntfy.sh/{NTFY_TOPIC}",
