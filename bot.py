@@ -729,8 +729,7 @@ def fetch_us_awards():
         "filters": {
             "award_type_codes": ["A","B","C","D"],
             "time_period": [{"start_date": start.strftime("%Y-%m-%d"),
-                             "end_date":   end.strftime("%Y-%m-%d"),
-                             "date_type":  "action_date"}],
+                             "end_date":   end.strftime("%Y-%m-%d")}],
             "award_amounts": [{"lower_bound": MIN_AWARD_USD}],
         },
         "fields": ["Award ID","Recipient Name","Award Amount","Awarding Agency",
