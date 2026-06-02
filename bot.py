@@ -729,13 +729,15 @@ def fetch_us_awards():
         "filters": {
             "award_type_codes": ["A","B","C","D"],
             "time_period": [{"start_date": start.strftime("%Y-%m-%d"),
-                             "end_date":   end.strftime("%Y-%m-%d")}],
+                             "end_date":   end.strftime("%Y-%m-%d"),
+                             "date_type":  "action_date"}],
             "award_amounts": [{"lower_bound": MIN_AWARD_USD}],
         },
         "fields": ["Award ID","Recipient Name","Award Amount","Awarding Agency",
-                   "Description","Start Date","End Date",
+                   "Description","Action Date","Period of Performance Start Date",
+                   "Period of Performance Current End Date",
                    "Place of Performance City Name","Place of Performance State Code"],
-        "sort": "Award Amount", "order": "desc", "limit": 100, "page": 1,
+        "sort": "Action Date", "order": "desc", "limit": 100, "page": 1,
     }).encode()
     try:
         req = urllib.request.Request(
@@ -754,7 +756,8 @@ def fetch_us_awards():
                 "amount_usd": float(a.get("Award Amount") or 0),
                 "currency": "USD", "agency": a.get("Awarding Agency",""),
                 "desc": (a.get("Description") or "")[:200],
-                "awarded": a.get("Start Date",""), "expires": a.get("End Date",""),
+                "awarded": a.get("Action Date",""),
+                "expires": a.get("Period of Performance Current End Date",""),
                 "location": ", ".join(filter(None,[
                     a.get("Place of Performance City Name",""),
                     a.get("Place of Performance State Code","")])),
