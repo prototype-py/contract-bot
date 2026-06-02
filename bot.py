@@ -8,6 +8,7 @@ import logging
 import threading
 import urllib.request
 import urllib.parse
+import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 
@@ -167,8 +168,20 @@ def init_db():
             title TEXT, amount_usd REAL, seen_at TEXT
         )
     """)
+    # Add indexes for faster cleanup queries
+    db.execute("CREATE INDEX IF NOT EXISTS idx_seen_awards_seen_at ON seen_awards(seen_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_seen_insider_seen_at ON seen_insider(seen_at)")
     db.commit()
     return db
+
+def cleanup_db():
+    """Remove records older than 180 days — run weekly"""
+    cutoff = (datetime.now() - timedelta(days=180)).isoformat()
+    with DB_LOCK:
+        DB.execute("DELETE FROM seen_awards WHERE seen_at < ?", (cutoff,))
+        DB.execute("DELETE FROM seen_insider WHERE seen_at < ?", (cutoff,))
+        DB.commit()
+    log.info("DB cleanup done")
 
 DB      = init_db()
 DB_LOCK = threading.Lock()
@@ -239,6 +252,7 @@ def fmt_local(n, currency):
 # ── Caches ────────────────────────────────────────────────
 _stock_cache    = {}
 _fx_cache       = {}
+_revenue_cache  = {}
 STOCK_CACHE_TTL = 600
 FX_CACHE_TTL    = 3600
 
@@ -298,8 +312,6 @@ def get_stock_info(ticker):
             return price, cap, curr, exch
         except:
             return None, None, None, None
-
-_revenue_cache = {}
 
 def get_revenue(ticker):
     if ticker in _revenue_cache:
@@ -1069,7 +1081,9 @@ def check():
     new_count = 0
 
     for award in all_awards:
-        uid = f"{award['country']}:{award['id']}:{award['amount']}"
+        uid = hashlib.sha256(
+            f"{award['country']}|{award.get('recipient','')}|{award.get('agency','')}|{award.get('amount',0)}|{award.get('awarded','')}".encode()
+        ).hexdigest()
         if already_seen(uid): continue
 
         ticker, exchange, currency = find_company(award["recipient"])
@@ -1090,10 +1104,17 @@ def check():
         years        = get_contract_years(award.get("awarded",""), award.get("expires",""))
         deal_score, rating, reasons = score_deal(amount_usd, cap_raw, years, insider_note, ticker)
 
-        # Synergy bonus — contract + insider buy within 30 days
+        # Synergy bonus — contract + insider buy, scaled by role
         if insider_note and deal_score >= 15:
-            deal_score = min(100, deal_score + 20)
-            reasons.append("CONTRACT + INSIDER BUY alignment — strongest signal")
+            insider_lower = insider_note.lower()
+            if any(t in insider_lower for t in ["chief executive","ceo"]):
+                bonus = 10
+            elif any(t in insider_lower for t in ["chief","president","cfo","coo"]):
+                bonus = 8
+            else:
+                bonus = 5
+            deal_score = min(100, deal_score + bonus)
+            reasons.append(f"CONTRACT + INSIDER BUY alignment (+{bonus}pts)")
             if deal_score >= 70:   rating = "STRONG BUY"
             elif deal_score >= 50: rating = "HIGH VALUE"
             elif deal_score >= 30: rating = "NOTABLE"
@@ -1130,6 +1151,7 @@ def check():
 
 def run_bot():
     send_test_push()
+    last_cleanup = datetime.now()
     while True:
         try:
             check()
@@ -1137,6 +1159,13 @@ def run_bot():
             import traceback
             log.error(f"Check error: {e}")
             log.error(traceback.format_exc())
+        # Weekly DB cleanup
+        if (datetime.now() - last_cleanup).days >= 7:
+            try:
+                cleanup_db()
+                last_cleanup = datetime.now()
+            except Exception as e:
+                log.warning(f"DB cleanup failed: {e}")
         log.info(f"Sleeping {CHECK_MINUTES} minutes until next check...")
         time.sleep(CHECK_MINUTES * 60)
 
