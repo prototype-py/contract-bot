@@ -931,8 +931,9 @@ def send_push(award, ticker, exchange, stock_currency, stock_price,
         name = name.replace(suffix, "")
     name = name.strip().title()
 
-    # Card title — shown as notification header (no emojis — header must be ASCII)
-    title = f"{fmt_usd(amount_usd)} — {name} (${ticker}) [{rating}]"
+    # Card title — shown as notification header (ASCII only)
+    title = f"{fmt_usd(amount_usd)} - {name} (${ticker}) [{rating}]"
+    title = title.encode("ascii", errors="ignore").decode("ascii")
 
     # Impact line
     cap_str = fmt_usd(cap_raw) if cap_raw and cap_raw > 0 else None
@@ -954,6 +955,8 @@ def send_push(award, ticker, exchange, stock_currency, stock_price,
 
     body = line1 + "\n" + line2
     if line3: body += "\n" + line3
+    # Sanitize special unicode chars that break latin-1 encoding
+    body = body.replace("\u2014", "-").replace("\u2013", "-").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
 
     if country == "USA":  link = f"https://www.usaspending.gov/award/{award_id}"
     elif country == "UK": link = f"https://www.contractsfinder.service.gov.uk/Notice/{award_id}"
@@ -988,7 +991,8 @@ def send_insider_push(ticker, insider, title, role, shares, price_paid,
     clean_name = " ".join(name_parts[:2]) if len(name_parts) >= 2 else insider
 
     # Card title
-    push_title = f"INSIDER BUY — ${ticker} [{role}]"
+    push_title = f"INSIDER BUY - ${ticker} [{role}]"
+    push_title = push_title.encode("ascii", errors="ignore").decode("ascii")
 
     # 3-line body
     line1 = f"{clean_name} ({title or role})"
