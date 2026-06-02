@@ -745,10 +745,10 @@ def fetch_us_awards():
             "award_amounts": [{"lower_bound": MIN_AWARD_USD}],
         },
         "fields": ["Award ID","Recipient Name","Award Amount","Awarding Agency",
-                   "Description","Action Date","Period of Performance Start Date",
+                   "Description","Award Date","Period of Performance Start Date",
                    "Period of Performance Current End Date",
                    "Place of Performance City Name","Place of Performance State Code"],
-        "sort": "Action Date", "order": "desc", "limit": 100, "page": 1,
+        "sort": "Award Amount", "order": "desc", "limit": 100, "page": 1,
     }).encode()
     try:
         req = urllib.request.Request(
@@ -767,7 +767,7 @@ def fetch_us_awards():
                 "amount_usd": float(a.get("Award Amount") or 0),
                 "currency": "USD", "agency": a.get("Awarding Agency",""),
                 "desc": (a.get("Description") or "")[:200],
-                "awarded": a.get("Action Date",""),
+                "awarded": a.get("Award Date",""),
                 "expires": a.get("Period of Performance Current End Date",""),
                 "location": ", ".join(filter(None,[
                     a.get("Place of Performance City Name",""),
