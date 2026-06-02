@@ -620,12 +620,111 @@ def check_insider_buys():
     log.info(f"Insider check done — {alerts_sent} alerts sent")
 
 # =========================================================
+# FETCH DoD — globalsecurity.org mirrors war.gov daily
+# Posted same day, usually 1-2 hours after 5pm Eastern
+# No IP blocking unlike war.gov direct
+# =========================================================
+
+def fetch_dod_awards():
+    try:
+        today   = datetime.now()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept":     "text/html,application/xhtml+xml",
+        }
+        results   = []
+        seen_uids = set()
+
+        for dt in [today, today - timedelta(days=1)]:
+            year      = dt.strftime("%Y")
+            month     = dt.strftime("%m")
+            day       = dt.strftime("%d")
+            used_date = dt.strftime("%Y-%m-%d")
+
+            # Fetch daily index page
+            daily_url = f"https://www.globalsecurity.org/military/library/news/{year}/{month}/{month}-{day}_index.htm"
+            try:
+                req = urllib.request.Request(daily_url, headers=headers)
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    daily_html = r.read().decode("utf-8", errors="ignore")
+            except Exception as e:
+                log.debug(f"DoD: daily index not found for {used_date}: {e}")
+                continue
+
+            # Find dod-contracts link
+            contract_links = re.findall(
+                r'href="(/military/library/news/\d{4}/\d{2}/dod-contracts_[^"]+\.htm)"',
+                daily_html
+            )
+            if not contract_links:
+                log.debug(f"DoD: no contract link on {used_date} page yet")
+                continue
+
+            # Fetch contract page
+            article_url = f"https://www.globalsecurity.org{contract_links[0]}"
+            try:
+                req2 = urllib.request.Request(article_url, headers=headers)
+                with urllib.request.urlopen(req2, timeout=20) as r2:
+                    article = r2.read().decode("utf-8", errors="ignore")
+            except Exception as e:
+                log.debug(f"DoD: could not fetch contract page: {e}")
+                continue
+
+            log.info(f"DoD: parsing contracts for {used_date}")
+
+            # Parse awards: Company, City, State, was awarded a $X
+            award_pattern = re.compile(
+                r'([A-Z][A-Za-z0-9 &.,\-]{2,70}?),\*?\s+[A-Z][a-zA-Z .]+,\s+[A-Z]{2},?\s+(?:was awarded|is awarded|are awarded|is being awarded)\s+(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
+                re.IGNORECASE
+            )
+            for match in award_pattern.finditer(article):
+                company = match.group(1).strip().rstrip(",*").strip()
+                if len(company) < 3 or company[0].islower():
+                    continue
+                amt_str = match.group(2).replace(",", "")
+                try:
+                    amount = float(amt_str)
+                    if amount < 1_000:
+                        amount *= 1_000_000
+                except:
+                    continue
+                if amount < MIN_AWARD_USD:
+                    continue
+                uid = f"DOD:{used_date}:{company[:30]}:{amount:.0f}"
+                if uid in seen_uids:
+                    continue
+                seen_uids.add(uid)
+                end  = min(len(article), match.end() + 400)
+                desc = re.sub(r'<[^>]+>', '', article[match.end():end]).strip()[:200]
+                results.append({
+                    "id":         uid,
+                    "recipient":  company,
+                    "amount":     amount,
+                    "amount_usd": amount,
+                    "currency":   "USD",
+                    "agency":     "Department of Defense",
+                    "desc":       desc,
+                    "awarded":    used_date,
+                    "expires":    "",
+                    "location":   "USA",
+                    "country":    "USA",
+                    "source":     "war.gov via globalsecurity.org",
+                })
+
+        log.info(f"DoD: {len(results)} contracts parsed")
+        return results
+
+    except Exception as e:
+        log.warning(f"DoD fetch failed: {e}")
+        return []
+
+# =========================================================
 # FETCH USA — USASpending.gov (48hr window catches DoD batch)
 # =========================================================
 
 def fetch_us_awards():
     end   = datetime.now()
-    start = end - timedelta(hours=48)
+    start = end - timedelta(hours=72)
     payload = json.dumps({
         "filters": {
             "award_type_codes": ["A","B","C","D"],
@@ -672,7 +771,7 @@ def fetch_us_awards():
 
 def fetch_uk_awards():
     try:
-        since = (datetime.now()-timedelta(hours=LOOKBACK_HOURS)).strftime("%Y-%m-%dT%H:%M:%S")
+        since = (datetime.now()-timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
         now   = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         url   = (f"https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search"
                  f"?publishedFrom={since}&publishedTo={now}&stages=award&limit=100")
@@ -832,8 +931,8 @@ def send_push(award, ticker, exchange, stock_currency, stock_price,
         name = name.replace(suffix, "")
     name = name.strip().title()
 
-    # Card title — shown as notification header
-    title = f"💰 {fmt_usd(amount_usd)} — {name} (${ticker})"
+    # Card title — shown as notification header (no emojis — header must be ASCII)
+    title = f"{fmt_usd(amount_usd)} — {name} (${ticker}) [{rating}]"
 
     # Impact line
     cap_str = fmt_usd(cap_raw) if cap_raw and cap_raw > 0 else None
@@ -862,9 +961,9 @@ def send_push(award, ticker, exchange, stock_currency, stock_price,
 
     req = urllib.request.Request(
         f"https://ntfy.sh/{NTFY_TOPIC}",
-        data=body.encode(),
-        headers={"Title":title,"Priority":priority,
-                 "Tags":"money_bag","Click":link},
+        data=body.encode("utf-8"),
+        headers={"Title":title.encode("utf-8").decode("utf-8"),"Priority":priority,
+                 "Tags":"money_bag","Click":link,"Content-Type":"text/plain; charset=utf-8"},
         method="POST",
     )
     retry(lambda: urllib.request.urlopen(req, timeout=10).close())
@@ -889,7 +988,7 @@ def send_insider_push(ticker, insider, title, role, shares, price_paid,
     clean_name = " ".join(name_parts[:2]) if len(name_parts) >= 2 else insider
 
     # Card title
-    push_title = f"🚨 INSIDER BUY — ${ticker}"
+    push_title = f"INSIDER BUY — ${ticker} [{role}]"
 
     # 3-line body
     line1 = f"{clean_name} ({title or role})"
@@ -905,12 +1004,13 @@ def send_insider_push(ticker, insider, title, role, shares, price_paid,
 
     req = urllib.request.Request(
         f"https://ntfy.sh/{NTFY_TOPIC}",
-        data=body.encode(),
+        data=body.encode("utf-8"),
         headers={
             "Title":    push_title,
             "Priority": priority,
             "Tags":     "rotating_light",
             "Click":    f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=4&dateb=&owner=include&count=10",
+            "Content-Type": "text/plain; charset=utf-8",
         },
         method="POST",
     )
@@ -925,8 +1025,8 @@ def send_test_push():
     try:
         req = urllib.request.Request(
             f"https://ntfy.sh/{NTFY_TOPIC}",
-            data="Monitoring USASpending • UK • Canada • Israel • SEC insider buys".encode(),
-            headers={"Title":"🤖 Contract Bot Live","Priority":"default","Tags":"white_check_mark"},
+            data="Monitoring USASpending | UK | Canada | Israel | SEC insider buys".encode("utf-8"),
+            headers={"Title":"Contract Bot Live","Priority":"default","Tags":"white_check_mark"},
             method="POST",
         )
         urllib.request.urlopen(req, timeout=10).close()
@@ -943,6 +1043,7 @@ def check():
     log.info(f"Checking all markets — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     all_awards = []
     for name, fn in [
+        ("DoD",    fetch_dod_awards),
         ("USA",    fetch_us_awards),
         ("UK",     fetch_uk_awards),
         ("Canada", fetch_canada_awards),
@@ -1037,7 +1138,7 @@ def run_bot():
 print("=" * 55)
 print("  GLOBAL CONTRACT ALERT BOT")
 print("=" * 55)
-print(f"  Sources    : USASpending + UK + Canada + Israel")
+print(f"  Sources    : DoD(globalsecurity) + USASpending + UK + Canada + Israel")
 print(f"  Insider    : {len(INSIDER_WATCHLIST)} tickers monitored")
 print(f"  Min award  : {fmt_usd(MIN_AWARD_USD)}")
 print(f"  Min insider: {fmt_usd(MIN_INSIDER_BUY_USD)}")
