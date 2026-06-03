@@ -41,9 +41,18 @@ log = logging.getLogger(__name__)
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(f"Contract Bot running. {datetime.now()}".encode())
+        if self.path == "/reset":
+            with DB_LOCK:
+                DB.execute("DELETE FROM seen_awards")
+                DB.commit()
+            log.info("DB reset — seen_awards cleared")
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"seen_awards cleared. Bot will re-alert on next check.")
+        else:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(f"Contract Bot running. {datetime.now()}".encode())
     def log_message(self, format, *args):
         pass
 
@@ -735,18 +744,16 @@ def fetch_dod_awards():
 # =========================================================
 
 def fetch_us_awards():
-    end   = datetime.now()
-    start = end - timedelta(hours=72)
+    today = datetime.now().strftime("%Y-%m-%d")
     payload = json.dumps({
         "filters": {
             "award_type_codes": ["A","B","C","D"],
-            "time_period": [{"start_date": start.strftime("%Y-%m-%d"),
-                             "end_date":   end.strftime("%Y-%m-%d")}],
+            "time_period": [{"start_date": today,
+                             "end_date":   today}],
             "award_amounts": [{"lower_bound": MIN_AWARD_USD}],
         },
         "fields": ["Award ID","Recipient Name","Award Amount","Awarding Agency",
-                   "Description","Award Date","Period of Performance Start Date",
-                   "Period of Performance Current End Date",
+                   "Description","Start Date","End Date",
                    "Place of Performance City Name","Place of Performance State Code"],
         "sort": "Award Amount", "order": "desc", "limit": 100, "page": 1,
     }).encode()
@@ -767,8 +774,8 @@ def fetch_us_awards():
                 "amount_usd": float(a.get("Award Amount") or 0),
                 "currency": "USD", "agency": a.get("Awarding Agency",""),
                 "desc": (a.get("Description") or "")[:200],
-                "awarded": a.get("Award Date",""),
-                "expires": a.get("Period of Performance Current End Date",""),
+                "awarded": a.get("Start Date",""),
+                "expires": a.get("End Date",""),
                 "location": ", ".join(filter(None,[
                     a.get("Place of Performance City Name",""),
                     a.get("Place of Performance State Code","")])),
@@ -785,7 +792,7 @@ def fetch_us_awards():
 
 def fetch_uk_awards():
     try:
-        since = (datetime.now()-timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+        since = datetime.now().strftime("%Y-%m-%dT00:00:00")
         now   = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         url   = (f"https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search"
                  f"?publishedFrom={since}&publishedTo={now}&stages=award&limit=100")
@@ -887,7 +894,7 @@ def fetch_israel_awards():
     try:
         fx      = get_fx_rate("ILS")
         min_ils = MIN_AWARD_USD / fx
-        since   = (datetime.now()-timedelta(hours=LOOKBACK_HOURS)).strftime("%Y-%m-%d")
+        since   = datetime.now().strftime("%Y-%m-%d")
         url = (f"https://next.obudget.org/api/query?"
                f"query=SELECT%20*%20FROM%20procurement_winner_detail"
                f"%20WHERE%20start_date%3E%3D%27{since}%27"
