@@ -196,10 +196,12 @@ DB      = init_db()
 DB_LOCK = threading.Lock()
 
 def already_seen(uid):
-    return DB.execute("SELECT 1 FROM seen_awards WHERE uid=?", (uid,)).fetchone() is not None
+    with DB_LOCK:
+        return DB.execute("SELECT 1 FROM seen_awards WHERE uid=?", (uid,)).fetchone() is not None
 
 def already_seen_insider(uid):
-    return DB.execute("SELECT 1 FROM seen_insider WHERE uid=?", (uid,)).fetchone() is not None
+    with DB_LOCK:
+        return DB.execute("SELECT 1 FROM seen_insider WHERE uid=?", (uid,)).fetchone() is not None
 
 def mark_seen(uid, award, amount_usd, country, ticker, exchange, deal_score):
     with DB_LOCK:
@@ -221,7 +223,8 @@ def mark_seen_insider(uid, ticker, insider_name, title, amount_usd):
         DB.commit()
 
 def get_cached_ticker(name):
-    row = DB.execute("SELECT ticker, exchange FROM ticker_cache WHERE name=?", (name,)).fetchone()
+    with DB_LOCK:
+        row = DB.execute("SELECT ticker, exchange FROM ticker_cache WHERE name=?", (name,)).fetchone()
     return (row[0], row[1]) if row else None
 
 def cache_ticker(name, ticker, exchange):
@@ -262,14 +265,15 @@ def fmt_local(n, currency):
 _stock_cache    = {}
 _fx_cache       = {}
 _revenue_cache  = {}
-STOCK_CACHE_TTL = 600
-FX_CACHE_TTL    = 3600
+STOCK_CACHE_TTL    = 600
+FX_CACHE_TTL       = 3600
+REVENUE_CACHE_TTL  = 86400  # 24 hours
 
 def get_fx_rate(currency):
     if currency == "USD": return 1.0
     if currency in _fx_cache:
         rate, ts = _fx_cache[currency]
-        if (datetime.now() - ts).seconds < FX_CACHE_TTL:
+        if (datetime.now() - ts).total_seconds() < FX_CACHE_TTL:
             return rate
     try:
         pairs = {"GBP":"GBPUSD=X","CAD":"CADUSD=X","ILS":"ILSUSD=X"}
@@ -286,7 +290,7 @@ def get_fx_rate(currency):
 def get_stock_info(ticker):
     if ticker in _stock_cache:
         price, cap, curr, exch, ts = _stock_cache[ticker]
-        if (datetime.now() - ts).seconds < STOCK_CACHE_TTL:
+        if (datetime.now() - ts).total_seconds() < STOCK_CACHE_TTL:
             return price, cap, curr, exch
     try:
         url = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
@@ -325,7 +329,7 @@ def get_stock_info(ticker):
 def get_revenue(ticker):
     if ticker in _revenue_cache:
         rev, ts = _revenue_cache[ticker]
-        if (datetime.now() - ts).seconds < FX_CACHE_TTL:
+        if (datetime.now() - ts).total_seconds() < REVENUE_CACHE_TTL:
             return rev
     return 0
 
@@ -830,7 +834,7 @@ def fetch_canada_awards():
     try:
         fx      = get_fx_rate("CAD")
         min_cad = MIN_AWARD_USD / fx
-        since   = (datetime.now()-timedelta(hours=LOOKBACK_HOURS)).strftime("%Y-%m-%d")
+        since   = datetime.now().strftime("%Y-%m-%d")
 
         # Try current and previous fiscal year dynamically
         year = datetime.now().year
@@ -872,7 +876,7 @@ def fetch_canada_awards():
             ref = ""
             for f in ["referenceNumber-numeroReference","reference_number"]:
                 if row.get(f): ref = row[f]; break
-            if not ref: ref = str(hash(vendor+awarded))
+            if not ref: ref = hashlib.sha256(f"{vendor}|{awarded}".encode()).hexdigest()[:16]
             results.append({
                 "id": ref, "recipient": vendor,
                 "amount": amount_cad, "amount_usd": amount_cad * fx,
