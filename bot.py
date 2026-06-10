@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 NTFY_TOPIC          = "my-contract-alerts"
 MIN_AWARD_USD       = 5_000_000
-CHECK_MINUTES       = 60
+CHECK_MINUTES       = 15
 DATABASE            = "contracts.db"
 MIN_DEAL_SCORE      = 20
 MIN_INSIDER_BUY_USD = 250_000
@@ -61,75 +61,142 @@ def start_web_server():
 # =========================================================
 
 KNOWN = {
-    "Booz Allen":          "BAH",
-    "Leidos":              "LDOS",
-    "SAIC":                "SAIC",
-    "Science Applications":"SAIC",
-    "Parsons":             "PSN",
-    "Palantir":            "PLTR",
-    "Accenture":           "ACN",
-    "Raytheon":            "RTX",
-    "RTX Corp":            "RTX",
-    "Northrop Grumman":    "NOC",
-    "Lockheed":            "LMT",
-    "L3Harris":            "LHX",
-    "General Dynamics":    "GD",
-    "Textron":             "TXT",
-    "Mercury Systems":     "MRCY",
-    "Kratos":              "KTOS",
-    "Leonardo DRS":        "DRS",
-    "Curtiss-Wright":      "CW",
-    "KBR":                 "KBR",
-    "Fluor":               "FLR",
-    "Jacobs":              "J",
-    "Tetra Tech":          "TTEK",
-    "AECOM":               "ACM",
-    "Maximus":             "MMS",
-    "ICF":                 "ICFI",
-    "CACI":                "CACI",
-    "Heico":               "HEI",
-    "BWX Technologies":    "BWXT",
-    "Rocket Lab":          "RKLB",
-    "VSE Corporation":     "VSEC",
-    "IBM":                 "IBM",
-    "Honeywell":           "HON",
-    "General Electric":    "GE",
-    "GE HealthCare":       "GEHC",
-    "Boeing":              "BA",
-    "Huntington Ingalls":  "HII",
-    "Huntington-Ingalls":  "HII",
-    "Oracle":              "ORCL",
-    "Microsoft":           "MSFT",
-    "Amazon":              "AMZN",
-    "Alphabet":            "GOOGL",
-    "Google":              "GOOGL",
-    "Amentum":             "AMTM",
-    "Pratt and Whitney":   "RTX",
-    "Pratt & Whitney":     "RTX",
-    "Collins Aerospace":   "RTX",
-    "Sikorsky":            "LMT",
-    "Aerojet":             "LHX",
-    "Spirit AeroSystems":  "SPR",
-    "BAE Systems":         "BA.L",
-    "Rolls-Royce":         "RR.L",
-    "QinetiQ":             "QQ.L",
-    "Babcock":             "BAB.L",
-    "Serco":               "SRP.L",
-    "CAE":                 "CAE.TO",
-    "MDA":                 "MDA.TO",
-    "Heroux-Devtek":       "HRX.TO",
-    "Calian":              "CGY.TO",
-    "Elbit Systems":       "ESLT",
-    "CyberArk":            "CYBR",
-    "Check Point":         "CHKP",
+    # Booz Allen Hamilton
+    "Booz Allen":                           "BAH",
+    # Leidos
+    "Leidos":                               "LDOS",
+    "Leidos Biomedical":                    "LDOS",
+    "Leidos Holdings":                      "LDOS",
+    # SAIC
+    "SAIC":                                 "SAIC",
+    "Science Applications":                 "SAIC",
+    # Parsons
+    "Parsons":                              "PSN",
+    # Palantir
+    "Palantir":                             "PLTR",
+    # Accenture
+    "Accenture":                            "ACN",
+    # RTX / Raytheon
+    "Raytheon":                             "RTX",
+    "RTX Corp":                             "RTX",
+    "Pratt and Whitney":                    "RTX",
+    "Pratt & Whitney":                      "RTX",
+    "Collins Aerospace":                    "RTX",
+    # Northrop Grumman
+    "Northrop Grumman":                     "NOC",
+    "Northrop Grumman Mission Systems":     "NOC",
+    "Northrop Grumman Space Systems":       "NOC",
+    "Northrop Grumman Aeronautics":         "NOC",
+    # Lockheed Martin
+    "Lockheed Martin":                      "LMT",
+    "Lockheed":                             "LMT",
+    "LM Aero":                              "LMT",
+    "Sikorsky":                             "LMT",
+    "Lockheed Martin Aeronautics":          "LMT",
+    "Lockheed Martin Rotary":               "LMT",
+    "Lockheed Martin Space":                "LMT",
+    "Lockheed Martin Missiles":             "LMT",
+    # L3Harris
+    "L3Harris":                             "LHX",
+    "L3 Harris":                            "LHX",
+    "Aerojet":                              "LHX",
+    # General Dynamics
+    "General Dynamics":                     "GD",
+    "General Dynamics Information":         "GD",
+    "General Dynamics Mission":             "GD",
+    "General Dynamics Land":                "GD",
+    "General Dynamics Ordnance":            "GD",
+    # Textron
+    "Textron":                              "TXT",
+    "Bell Textron":                         "TXT",
+    "Bell Helicopter":                      "TXT",
+    # Mercury Systems
+    "Mercury Systems":                      "MRCY",
+    # Kratos
+    "Kratos":                               "KTOS",
+    # Leonardo DRS
+    "Leonardo DRS":                         "DRS",
+    # Curtiss-Wright
+    "Curtiss-Wright":                       "CW",
+    # KBR
+    "KBR":                                  "KBR",
+    "KBR Wyle":                             "KBR",
+    # Fluor
+    "Fluor":                                "FLR",
+    "Fluor Marine":                         "FLR",
+    "Fluor Federal":                        "FLR",
+    # Jacobs
+    "Jacobs":                               "J",
+    # Tetra Tech
+    "Tetra Tech":                           "TTEK",
+    # AECOM
+    "AECOM":                                "ACM",
+    # Maximus
+    "Maximus":                              "MMS",
+    "Maximus Federal":                      "MMS",
+    # ICF
+    "ICF":                                  "ICFI",
+    # CACI
+    "CACI":                                 "CACI",
+    # Heico
+    "Heico":                                "HEI",
+    # BWX Technologies
+    "BWX Technologies":                     "BWXT",
+    "BWXT":                                 "BWXT",
+    # Rocket Lab
+    "Rocket Lab":                           "RKLB",
+    # VSE Corporation
+    "VSE Corporation":                      "VSEC",
+    "VSE Corp":                             "VSEC",
+    # IBM
+    "IBM":                                  "IBM",
+    # Honeywell
+    "Honeywell":                            "HON",
+    "Honeywell Federal":                    "HON",
+    # General Electric
+    "General Electric":                     "GE",
+    "GE Aerospace":                         "GE",
+    # GE HealthCare
+    "GE HealthCare":                        "GEHC",
+    # Boeing
+    "Boeing":                               "BA",
+    "The Boeing":                           "BA",
+    # Huntington Ingalls
+    "Huntington Ingalls":                   "HII",
+    "Huntington-Ingalls":                   "HII",
+    "Newport News Shipbuilding":            "HII",
+    "Ingalls Shipbuilding":                 "HII",
+    # Humana
+    "Humana":                               "HUM",
+    # Oracle
+    "Oracle":                               "ORCL",
+    "Oracle Health":                        "ORCL",
+    # Microsoft
+    "Microsoft":                            "MSFT",
+    # Amazon
+    "Amazon":                               "AMZN",
+    "Amazon Web Services":                  "AMZN",
+    "AWS":                                  "AMZN",
+    # Google / Alphabet
+    "Alphabet":                             "GOOGL",
+    "Google":                               "GOOGL",
+    # Amentum
+    "Amentum":                              "AMTM",
+    # Spirit AeroSystems
+    "Spirit AeroSystems":                   "SPR",
+    # Elbit Systems
+    "Elbit Systems":                        "ESLT",
+    # CyberArk
+    "CyberArk":                             "CYBR",
+    # Check Point
+    "Check Point":                          "CHKP",
 }
 
 INSIDER_WATCHLIST = [
     "KTOS","MRCY","DRS","PSN","RKLB","VSEC","LDOS","BAH","SAIC",
     "CACI","LMT","NOC","RTX","GD","LHX","HII","KBR","TTEK",
     "ACM","PLTR","HON","GE","GEHC","BA","BWXT","CW","HEI",
-    "ICFI","MMS","SPR","FLR","IBM","AMTM",
-    "ESLT","CYBR","CHKP",
+    "ICFI","MMS","SPR","FLR","IBM","AMTM","ESLT","CYBR","CHKP",
 ]
 
 # =========================================================
@@ -144,8 +211,10 @@ def init_db():
     db.execute("""CREATE TABLE IF NOT EXISTS seen_insider (
         uid TEXT PRIMARY KEY, ticker TEXT, insider_name TEXT,
         title TEXT, amount_usd REAL, seen_at TEXT)""")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_sa_seen ON seen_awards(seen_at)")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_si_seen ON seen_insider(seen_at)")
+    db.execute("""CREATE TABLE IF NOT EXISTS seen_8k (
+        uid TEXT PRIMARY KEY, ticker TEXT, filed TEXT, seen_at TEXT)""")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_sa ON seen_awards(seen_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_si ON seen_insider(seen_at)")
     db.commit()
     return db
 
@@ -163,7 +232,8 @@ def already_seen_insider(uid):
 def mark_seen(uid, recipient, amount_usd, agency, country, ticker, score):
     with DB_LOCK:
         DB.execute("INSERT OR IGNORE INTO seen_awards VALUES (?,?,?,?,?,?,?,?)",
-            (uid, recipient, amount_usd, agency, country, ticker, score, datetime.now().isoformat()))
+            (uid, recipient, amount_usd, agency, country, ticker, score,
+             datetime.now().isoformat()))
         DB.commit()
 
 def mark_seen_insider(uid, ticker, name, title, amount):
@@ -177,7 +247,9 @@ def cleanup_old():
     with DB_LOCK:
         DB.execute("DELETE FROM seen_awards WHERE seen_at < ?", (cutoff,))
         DB.execute("DELETE FROM seen_insider WHERE seen_at < ?", (cutoff,))
+        DB.execute("DELETE FROM seen_8k WHERE seen_at < ?", (cutoff,))
         DB.commit()
+    log.info("DB cleanup done")
 
 # =========================================================
 # HELPERS
@@ -190,11 +262,23 @@ def fmt_usd(n):
     return f"${v/1e3:.0f}K"
 
 def find_ticker(name):
-    name_lower = name.lower()
+    nl = name.lower()
     for company, ticker in KNOWN.items():
-        if company.lower() in name_lower:
+        if company.lower() in nl:
             return ticker
     return None
+
+def get_years(awarded, expires):
+    try:
+        s = datetime.strptime(awarded[:10], "%Y-%m-%d")
+        e = datetime.strptime(expires[:10], "%Y-%m-%d")
+        return max((e - s).days / 365.25, 0)
+    except:
+        return 0
+
+# =========================================================
+# STOCK INFO — quoteSummary for reliable marketCap
+# =========================================================
 
 _stock_cache = {}
 
@@ -203,6 +287,21 @@ def get_stock_info(ticker):
         price, cap, ts = _stock_cache[ticker]
         if (datetime.now() - ts).total_seconds() < 600:
             return price, cap
+    # quoteSummary returns marketCap reliably unlike /chart/
+    try:
+        url = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+               f"?modules=price")
+        req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        p    = data["quoteSummary"]["result"][0]["price"]
+        price = p.get("regularMarketPrice", {}).get("raw", 0)
+        cap   = p.get("marketCap", {}).get("raw", 0)
+        _stock_cache[ticker] = (price, cap, datetime.now())
+        return price, cap
+    except:
+        pass
+    # Fallback to chart endpoint
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
         req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
@@ -220,11 +319,11 @@ def get_stock_info(ticker):
 # SCORING
 # =========================================================
 
-def score_deal(amount_usd, market_cap, years, has_insider):
+def score_deal(amount_usd, market_cap, years):
     score = 0
 
     if not market_cap or market_cap <= 0:
-        score += 20  # unknown cap — moderate base
+        pass  # unknown cap — no boost, just use absolute size
     else:
         pct = (amount_usd / market_cap) * 100
         if   pct >= 50: score += 60
@@ -244,8 +343,6 @@ def score_deal(amount_usd, market_cap, years, has_insider):
     elif years >= 2: score += 4
     elif years >= 1: score += 2
 
-    if has_insider: score += 10
-
     score = min(score, 100)
     if   score >= 70: rating = "STRONG BUY"
     elif score >= 50: rating = "HIGH VALUE"
@@ -254,21 +351,13 @@ def score_deal(amount_usd, market_cap, years, has_insider):
     else:             rating = "LOW IMPACT"
     return score, rating
 
-def get_years(awarded, expires):
-    try:
-        s = datetime.strptime(awarded[:10], "%Y-%m-%d")
-        e = datetime.strptime(expires[:10], "%Y-%m-%d")
-        return max((e - s).days / 365.25, 0)
-    except:
-        return 0
-
 # =========================================================
 # PUSH
 # =========================================================
 
 def ntfy(title, body, priority="default", tags="money_bag", link=None):
     headers = {
-        "Title":        title.encode("ascii","ignore").decode("ascii"),
+        "Title":        title.encode("ascii", "ignore").decode("ascii"),
         "Priority":     priority,
         "Tags":         tags,
         "Content-Type": "text/plain; charset=utf-8",
@@ -284,22 +373,20 @@ def ntfy(title, body, priority="default", tags="money_bag", link=None):
     urllib.request.urlopen(req, timeout=10).close()
 
 def send_contract_alert(award, ticker, score, rating, price, cap):
-    amt     = float(award.get("amount_usd", award.get("amount", 0)))
-    agency  = award.get("agency","")[:40]
-    country = award.get("country","")
-    awarded = award.get("awarded","")
-    expires = award.get("expires","")
-    name    = award.get("recipient","")
+    amt     = float(award.get("amount_usd", 0))
+    agency  = award.get("agency", "")[:40]
+    country = award.get("country", "")
+    awarded = award.get("awarded", "")
+    expires = award.get("expires", "")
+    name    = award.get("recipient", "")
 
-    # Clean company name
     clean = name
-    for s in [", INC.",", LLC",", L.P."," INC"," LLC"," CORP",
-              " FEDERAL"," FEDERAL SERVICES"," GOVERNMENT SERVICES",
-              " INFORMATION TECHNOLOGY, INC."," SYSTEMS CORPORATION"]:
-        clean = clean.replace(s,"")
+    for s in [", INC.", ", LLC", ", L.P.", " INC", " LLC", " CORP",
+              " FEDERAL", " FEDERAL SERVICES", " GOVERNMENT SERVICES",
+              " INFORMATION TECHNOLOGY, INC.", " SYSTEMS CORPORATION"]:
+        clean = clean.replace(s, "")
     clean = clean.strip().title()
 
-    cap_str = fmt_usd(cap) if cap else "?"
     pct_str = f" • {(amt/cap)*100:.1f}% of cap" if cap else ""
     dur_str = ""
     if expires:
@@ -328,12 +415,12 @@ def send_contract_alert(award, ticker, score, rating, price, cap):
     log.info(f"  ALERT [{rating} {score}]: ${ticker} {fmt_usd(amt)}")
 
 def send_insider_alert(ticker, name, title, role, shares, price_paid, amount, stock_price):
-    if   "ceo" in title.lower() or "chief executive" in title.lower():
-        priority = "urgent"
-    elif "chief" in title.lower() or "president" in title.lower():
-        priority = "high"
-    else:
-        priority = "high"
+    price_paid   = price_paid or 0
+    stock_price  = stock_price or 0
+
+    if   "ceo" in title.lower() or "chief executive" in title.lower(): priority = "urgent"
+    elif "chief" in title.lower() or "president" in title.lower():     priority = "high"
+    else:                                                                priority = "high"
 
     vs = ""
     if stock_price and price_paid:
@@ -345,15 +432,15 @@ def send_insider_alert(ticker, name, title, role, shares, price_paid, amount, st
         f"{name} ({title})\n"
         f"{shares:,} shares @ ${price_paid:.2f} = {fmt_usd(amount)}{vs}"
     )
-    link = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=4&dateb=&owner=include&count=10"
+    link = (f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+            f"&company={ticker}&type=4&dateb=&owner=include&count=10")
     ntfy(push_title, body, priority, "rotating_light", link)
     log.info(f"  INSIDER: ${ticker} {name} {fmt_usd(amount)}")
 
 # =========================================================
-# DOD — globalsecurity.org (mirrors war.gov same day)
+# DOD — globalsecurity.org mirrors war.gov same day ~7pm Eastern
 # =========================================================
 
-# Hardcoded known article IDs — bot updates this at runtime
 GLOBALSECURITY_KNOWN = {
     "2026-06-01": 4505747,
     "2026-06-02": 4506825,
@@ -371,10 +458,11 @@ def fetch_dod_page(dt):
     used_date = dt.strftime("%Y-%m-%d")
     ym        = dt.strftime("%Y/%m")
 
-    # Try hardcoded ID first — fast path
+    # Fast path — known ID
     if used_date in GLOBALSECURITY_KNOWN:
-        article_id  = GLOBALSECURITY_KNOWN[used_date]
-        url = f"https://www.globalsecurity.org/military/library/news/{ym}/dod-contracts_{article_id}.htm"
+        article_id = GLOBALSECURITY_KNOWN[used_date]
+        url = (f"https://www.globalsecurity.org/military/library/news/"
+               f"{ym}/dod-contracts_{article_id}.htm")
         try:
             req = urllib.request.Request(url, headers=DOD_HEADERS)
             with urllib.request.urlopen(req, timeout=15) as r:
@@ -383,9 +471,9 @@ def fetch_dod_page(dt):
                 log.info(f"DoD: fetched {used_date} (id={article_id})")
                 return html, used_date
         except Exception as e:
-            log.debug(f"DoD known ID failed {used_date}: {e}")
+            log.warning(f"DoD known ID failed {used_date}: {e}")
 
-    # Estimate and scan — only if no known ID
+    # Scan — estimate ID from last known, check ±2000 in steps of 50
     known_dates = sorted(GLOBALSECURITY_KNOWN.keys())
     if known_dates:
         last_date = datetime.strptime(known_dates[-1], "%Y-%m-%d")
@@ -393,23 +481,27 @@ def fetch_dod_page(dt):
         days_diff = (dt - last_date).days
         estimated = int(last_id + days_diff * 800)
     else:
-        estimated = 4510000
+        estimated = 4512000
 
-    log.debug(f"DoD: scanning for {used_date} near ID {estimated}")
-    for delta in range(0, 3000, 100):
+    log.info(f"DoD: scanning for {used_date} near ID {estimated}")
+    for delta in range(0, 2000, 50):
         for article_id in [estimated + delta, estimated - delta]:
-            if article_id < 4000000: continue
-            url = f"https://www.globalsecurity.org/military/library/news/{ym}/dod-contracts_{article_id}.htm"
+            if article_id < 4000000:
+                continue
+            url = (f"https://www.globalsecurity.org/military/library/news/"
+                   f"{ym}/dod-contracts_{article_id}.htm")
             try:
                 req = urllib.request.Request(url, headers=DOD_HEADERS)
                 with urllib.request.urlopen(req, timeout=4) as r:
                     html = r.read().decode("utf-8", errors="ignore")
-                if "was awarded" in html.lower() and used_date.replace("-","") in html:
+                # Confirm it's actually this date's page
+                if "was awarded" in html.lower() and used_date[5:] in html:
                     GLOBALSECURITY_KNOWN[used_date] = article_id
                     log.info(f"DoD: found {used_date} at id={article_id}")
                     return html, used_date
             except:
                 continue
+    log.info(f"DoD: no page yet for {used_date}")
     return None, used_date
 
 def parse_dod_html(html, used_date):
@@ -421,25 +513,33 @@ def parse_dod_html(html, used_date):
         r'(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
         re.IGNORECASE
     )
-    for m in pattern.finditer(html):
+    matches = list(pattern.finditer(html))
+    log.info(f"DoD: {len(matches)} raw pattern matches for {used_date}")
+    for m in matches:
         company = m.group(1).strip().rstrip(",*").strip()
         if len(company) < 3 or company[0].islower():
             continue
         try:
-            amount = float(m.group(2).replace(",",""))
-            if amount < 1000: amount *= 1_000_000
+            amount = float(m.group(2).replace(",", ""))
+            if amount < 1000:
+                amount *= 1_000_000
         except:
             continue
-        if amount < MIN_AWARD_USD: continue
-        uid = hashlib.sha256(f"DOD|{company}|{amount:.0f}|{used_date}".encode()).hexdigest()
-        if uid in seen: continue
+        if amount < MIN_AWARD_USD:
+            continue
+        uid = hashlib.sha256(
+            f"DOD|{company}|{amount:.0f}|{used_date}".encode()
+        ).hexdigest()
+        if uid in seen:
+            continue
         seen.add(uid)
         end  = min(len(html), m.end() + 300)
         desc = re.sub(r'<[^>]+>', '', html[m.end():end]).strip()[:150]
         results.append({
-            "uid": uid, "recipient": company, "amount": amount,
-            "amount_usd": amount, "agency": "Dept of Defense",
-            "desc": desc, "awarded": used_date, "expires": "",
+            "uid": uid, "recipient": company,
+            "amount": amount, "amount_usd": amount,
+            "agency": "Dept of Defense", "desc": desc,
+            "awarded": used_date, "expires": "",
             "country": "USA", "source": "war.gov/globalsecurity.org",
         })
     return results
@@ -448,117 +548,23 @@ def fetch_dod_awards():
     results = []
     today   = datetime.now()
     for dt in [today, today - timedelta(days=1)]:
-        if dt.weekday() >= 5:  # skip weekends
+        if dt.weekday() >= 5:
             continue
         html, used_date = fetch_dod_page(dt)
         if html:
             parsed = parse_dod_html(html, used_date)
             log.info(f"DoD: {len(parsed)} contracts for {used_date}")
             results.extend(parsed)
-        else:
-            log.info(f"DoD: no page yet for {used_date}")
     return results
 
 # =========================================================
-# UK — Contracts Finder (real-time API)
-# =========================================================
-
-def fetch_uk_awards():
-    try:
-        since = (datetime.now() - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%S")
-        now   = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-        url   = (f"https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search"
-                 f"?publishedFrom={since}&publishedTo={now}&stages=award&limit=100")
-        req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0","Accept":"application/json"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.loads(r.read())
-        results = []
-        for release in data.get("releases", []):
-            for award in release.get("awards", []):
-                amt_gbp = float((award.get("value") or {}).get("amount", 0) or 0)
-                amt_usd = amt_gbp * 1.27  # approximate GBP->USD
-                if amt_usd < MIN_AWARD_USD: continue
-                suppliers = award.get("suppliers", [{}])
-                name = suppliers[0].get("name","Unknown") if suppliers else "Unknown"
-                uid  = hashlib.sha256(f"UK|{name}|{amt_gbp:.0f}".encode()).hexdigest()
-                results.append({
-                    "uid": uid, "recipient": name,
-                    "amount": amt_gbp, "amount_usd": amt_usd,
-                    "agency": release.get("buyer",{}).get("name",""),
-                    "desc": (release.get("tender",{}).get("description") or "")[:150],
-                    "awarded": (award.get("date") or "")[:10],
-                    "expires": ((award.get("contractPeriod") or {}).get("endDate") or "")[:10],
-                    "country": "UK",
-                    "id": release.get("ocid",""),
-                    "source": "Contracts Finder (UK)",
-                })
-        log.info(f"UK: {len(results)} contracts")
-        return results
-    except Exception as e:
-        log.warning(f"UK fetch failed: {e}")
-        return []
-
-
-# =========================================================
-# FETCH USA — SAM.gov Contract Awards API (FPDS direct)
-# Civilian contracts appear same day or next day
-# DoD covered separately via globalsecurity
+# USA — USASpending.gov (48hr window, all agencies)
 # =========================================================
 
 def fetch_us_awards():
     try:
-        # Date range — last 2 days to catch any same-day postings
         end   = datetime.now()
-        start = end - timedelta(hours=1)
-        date_from = start.strftime("%m/%d/%Y")
-        date_to   = end.strftime("%m/%d/%Y")
-
-        # SAM.gov Contract Awards public API — no key needed for civilian data
-        # Filter: signed in last 2 days, over MIN_AWARD_USD, non-DoD agencies
-        url = (
-            f"https://api.sam.gov/contract-awards/v1/search?"
-            f"api_key=DEMO_KEY"
-            f"&dateSignedFrom={date_from}"
-            f"&dateSignedTo={date_to}"
-            f"&dollarObligatedFrom={MIN_AWARD_USD:.0f}"
-            f"&limit=100"
-            f"&fundingAgencyName=!DEPT+OF+DEFENSE"
-        )
-        req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0","Accept":"application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read())
-
-        results = []
-        for a in data.get("contractAwardsData", data.get("data", [])):
-            recipient = (a.get("awardee",{}).get("legalBusinessName","") or
-                        a.get("awardeeName","") or "Unknown")
-            amt = float(a.get("dollarObligated") or a.get("totalDollarsObligated") or 0)
-            if amt < MIN_AWARD_USD: continue
-            agency   = (a.get("fundingAgency",{}).get("name","") or
-                       a.get("fundingAgencyName",""))
-            awarded  = (a.get("dateSigned","") or a.get("awardDate",""))[:10]
-            desc     = (a.get("descriptionOfContractRequirement","") or
-                       a.get("description",""))[:150]
-            uid = hashlib.sha256(f"USA|{recipient}|{amt:.0f}|{awarded}".encode()).hexdigest()
-            results.append({
-                "uid": uid, "recipient": recipient,
-                "amount": amt, "amount_usd": amt,
-                "agency": agency, "desc": desc,
-                "awarded": awarded, "expires": "",
-                "country": "USA", "source": "SAM.gov (FPDS)",
-            })
-        log.info(f"USA: {len(results)} contracts")
-        return results
-    except Exception as e:
-        log.warning(f"SAM.gov fetch failed: {e}")
-        # Fallback to USASpending
-        return fetch_us_awards_fallback()
-
-def fetch_us_awards_fallback():
-    """USASpending fallback — broader but slower data"""
-    try:
-        end   = datetime.now()
-        start = end - timedelta(hours=1)
+        start = end - timedelta(hours=48)
         payload = json.dumps({
             "filters": {
                 "award_type_codes": ["A","B","C","D"],
@@ -579,97 +585,47 @@ def fetch_us_awards_fallback():
         with urllib.request.urlopen(req, timeout=30) as r:
             data = json.loads(r.read())
         results = []
-        for a in data.get("results", []):
-            amt = float(a.get("Award Amount") or 0)
-            if amt < MIN_AWARD_USD: continue
-            uid = hashlib.sha256(
-                f"USA|{a.get('Recipient Name','')}|{amt:.0f}|{a.get('Start Date','')}".encode()
-            ).hexdigest()
-            results.append({
-                "uid": uid,
-                "recipient": a.get("Recipient Name",""),
-                "amount": amt, "amount_usd": amt,
-                "agency": a.get("Awarding Agency",""),
-                "desc": (a.get("Description") or "")[:150],
-                "awarded": a.get("Start Date",""),
-                "expires": a.get("End Date",""),
-                "country": "USA", "source": "USASpending.gov",
-            })
-        log.info(f"USA (fallback): {len(results)} contracts")
-        return results
-    except Exception as e:
-        log.warning(f"USASpending fallback failed: {e}")
-        return []
-
-# =========================================================
-# FETCH CANADA — CanadaBuys CSV (daily update)
-# =========================================================
-
-def fetch_canada_awards():
-    try:
-        since = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-        year  = datetime.now().year
-        content = None
-        for y in [year, year - 1]:
-            url = f"https://canadabuys.canada.ca/opendata/pub/{y}-{y+1}-awardNotice-avisAttribution.csv"
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0"})
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    content = r.read().decode("utf-8-sig")
+        page = 1
+        while page <= 5:  # max 5 pages = 500 contracts
+            payload_obj = json.loads(payload)
+            payload_obj["page"] = page
+            req = urllib.request.Request(
+                "https://api.usaspending.gov/api/v2/search/spending_by_award/",
+                data=json.dumps(payload_obj).encode(),
+                headers={"Content-Type":"application/json","User-Agent":"ContractBot/1.0"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read())
+            page_results = data.get("results", [])
+            if not page_results:
                 break
-            except:
-                continue
-        if not content:
-            log.warning("Canada: CSV not available")
-            return []
-
-        # CAD to USD approximate
-        cad_rate = 0.73
-        min_cad  = MIN_AWARD_USD / cad_rate
-
-        results = []
-        reader  = csv.DictReader(io.StringIO(content))
-        for row in reader:
-            val_str = ""
-            for f in ["contractValue-valeurContrat","totalValue-valeurTotale","contract_value"]:
-                if row.get(f): val_str = row[f]; break
-            try: amount_cad = float(str(val_str).replace(",","").replace("$","").strip() or 0)
-            except: amount_cad = 0
-            if amount_cad < min_cad: continue
-
-            awarded = ""
-            for f in ["publicationDate-datePublication","contractDate-dateContrat","contract_date"]:
-                if row.get(f): awarded = str(row[f])[:10]; break
-            if not awarded or awarded < since: continue
-
-            vendor = ""
-            for f in ["vendorName-nomFournisseur","vendor_name","supplierName-nomFournisseur"]:
-                if row.get(f): vendor = row[f]; break
-            if not vendor: continue
-
-            ref = ""
-            for f in ["referenceNumber-numeroReference","reference_number"]:
-                if row.get(f): ref = row[f]; break
-            if not ref:
-                ref = hashlib.sha256(f"{vendor}|{awarded}|{amount_cad}".encode()).hexdigest()[:16]
-
-            uid = hashlib.sha256(f"CA|{vendor}|{amount_cad:.0f}|{awarded}".encode()).hexdigest()
-            amount_usd = amount_cad * cad_rate
-
-            results.append({
-                "uid": uid,
-                "recipient": vendor,
-                "amount": amount_cad, "amount_usd": amount_usd,
-                "agency": row.get("ownerAcronym-acronymeProprietaire",""),
-                "desc": str(row.get("description-descriptionDuContrat") or "")[:150],
-                "awarded": awarded, "expires": "",
-                "country": "Canada",
-                "source": "CanadaBuys.canada.ca",
-            })
-        log.info(f"Canada: {len(results)} contracts")
+            for a in page_results:
+                amt = float(a.get("Award Amount") or 0)
+                if amt < MIN_AWARD_USD:
+                    continue
+                uid = hashlib.sha256(
+                    f"USA|{a.get('Recipient Name','')}|{amt:.0f}|{a.get('Start Date','')}".encode()
+                ).hexdigest()
+                results.append({
+                    "uid":        uid,
+                    "recipient":  a.get("Recipient Name",""),
+                    "amount":     amt,
+                    "amount_usd": amt,
+                    "agency":     a.get("Awarding Agency",""),
+                    "desc":       (a.get("Description") or "")[:150],
+                    "awarded":    a.get("Start Date",""),
+                    "expires":    a.get("End Date",""),
+                    "country":    "USA",
+                    "source":     "USASpending.gov",
+                })
+            if len(page_results) < 100:
+                break  # last page
+            page += 1
+        log.info(f"USA: {len(results)} contracts ({page-1} pages)")
         return results
     except Exception as e:
-        log.warning(f"Canada failed: {e}")
+        log.warning(f"USASpending failed: {e}")
         return []
 
 # =========================================================
@@ -693,13 +649,13 @@ def fetch_form4s(ticker):
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
         out = []
-        for hit in data.get("hits",{}).get("hits",[]):
-            src = hit.get("_source",{})
+        for hit in data.get("hits", {}).get("hits", []):
+            src = hit.get("_source", {})
             out.append({
-                "accession": hit.get("_id",""),
-                "filed":     src.get("file_date",""),
-                "filer":     src.get("display_names",["Unknown"])[0],
-                "cik":       src.get("entity_id",""),
+                "accession": hit.get("_id", ""),
+                "filed":     src.get("file_date", ""),
+                "filer":     src.get("display_names", ["Unknown"])[0],
+                "cik":       src.get("entity_id", ""),
             })
         return out
     except Exception as e:
@@ -713,15 +669,16 @@ def get_xml_url(accession, cik):
             dashed = f"{acc[:10]}-{acc[10:12]}-{acc[12:]}"
         else:
             dashed = re.sub(r'(\d{10})(\d{2})(\d{6})', r'\1-\2-\3', acc)
-        idx_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{dashed}-index.htm"
+        idx_url = (f"https://www.sec.gov/Archives/edgar/data"
+                   f"/{cik}/{acc}/{dashed}-index.htm")
         req = urllib.request.Request(idx_url, headers=SEC_HEADERS)
         with urllib.request.urlopen(req, timeout=10) as r:
             html = r.read().decode("utf-8", errors="ignore")
         for link in re.findall(r'href="([^"]*\.xml)"', html, re.IGNORECASE):
             if "xsl" in link.lower() or "stylesheet" in link.lower():
                 continue
-            if link.startswith("http"): return link
-            if link.startswith("/"): return f"https://www.sec.gov{link}"
+            if link.startswith("http"):  return link
+            if link.startswith("/"):     return f"https://www.sec.gov{link}"
             return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{link}"
         return None
     except:
@@ -744,21 +701,28 @@ def parse_form4(xml_url, ticker, filer, filed):
 
         officer_title = tag("officerTitle")
         tl = officer_title.lower()
-        if any(t in tl for t in ["chief executive","ceo"]): role = "CEO"
+        if any(t in tl for t in ["chief executive","ceo"]):          role = "CEO"
         elif any(t in tl for t in ["chief","president","cfo","coo"]): role = "C-Suite"
-        else: role = "Director"
+        else:                                                          role = "Director"
 
         signals = []
-        for block in re.findall(r'<nonDerivativeTransaction>(.*?)</nonDerivativeTransaction>',
-                                xml, re.DOTALL | re.IGNORECASE):
-            code = re.search(r'<transactionCode>(.*?)</transactionCode>', block, re.IGNORECASE)
-            if not code or code.group(1).strip() != "P": continue
-
-            own = re.search(r'<directOrIndirectOwnership>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
-            if own and own.group(1).strip() == "I": continue
+        for block in re.findall(
+                r'<nonDerivativeTransaction>(.*?)</nonDerivativeTransaction>',
+                xml, re.DOTALL | re.IGNORECASE):
+            code = re.search(r'<transactionCode>(.*?)</transactionCode>',
+                             block, re.IGNORECASE)
+            if not code or code.group(1).strip() != "P":
+                continue
+            own = re.search(
+                r'<directOrIndirectOwnership>.*?<value>(.*?)</value>',
+                block, re.DOTALL | re.IGNORECASE)
+            if own and own.group(1).strip() == "I":
+                continue
 
             def val(tag_name):
-                m = re.search(rf'<{tag_name}>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
+                m = re.search(
+                    rf'<{tag_name}>.*?<value>(.*?)</value>',
+                    block, re.DOTALL | re.IGNORECASE)
                 if m:
                     try: return float(m.group(1).strip().replace(",",""))
                     except: pass
@@ -767,7 +731,8 @@ def parse_form4(xml_url, ticker, filer, filed):
             shares    = val("transactionShares")
             price_per = val("transactionPricePerShare")
             total     = shares * price_per
-            if total < MIN_INSIDER_BUY_USD: continue
+            if total < MIN_INSIDER_BUY_USD:
+                continue
 
             uid = f"INSIDER:{ticker}:{filer}:{filed}:{total:.0f}"
             signals.append({
@@ -792,25 +757,209 @@ def check_insiders():
                     signals = _insider_cache[key]
                 else:
                     xml_url = get_xml_url(filing["accession"], filing["cik"])
-                    signals = parse_form4(xml_url, ticker, filing["filer"], filing["filed"]) if xml_url else []
+                    signals = (parse_form4(xml_url, ticker, filing["filer"], filing["filed"])
+                               if xml_url else [])
                     _insider_cache[key] = signals
                     time.sleep(0.3)
 
                 for s in signals:
-                    if already_seen_insider(s["uid"]): continue
+                    if already_seen_insider(s["uid"]):
+                        continue
                     price, _ = get_stock_info(ticker)
                     log.info(f"INSIDER ★ ${ticker} {s['filer']} ({s['role']}) {fmt_usd(s['amount'])}")
                     try:
-                        send_insider_alert(ticker, s["filer"], s["title"], s["role"],
-                                           s["shares"], s["price"], s["amount"], price)
+                        send_insider_alert(
+                            ticker, s["filer"], s["title"], s["role"],
+                            s["shares"], s["price"], s["amount"], price)
                         sent += 1
                     except Exception as e:
                         log.error(f"Insider push failed: {e}")
-                    mark_seen_insider(s["uid"], ticker, s["filer"], s["title"], s["amount"])
+                    mark_seen_insider(s["uid"], ticker, s["filer"],
+                                      s["title"], s["amount"])
         except Exception as e:
-            log.debug(f"Insider check failed {ticker}: {e}")
+            log.warning(f"Insider check failed {ticker}: {e}")
         time.sleep(0.3)
     log.info(f"Insider check done — {sent} sent")
+
+
+
+# Reverse map for SEC search — company name → better results than ticker symbol
+TICKER_TO_NAME = {
+    "BAH":  "Booz Allen Hamilton",
+    "LDOS": "Leidos",
+    "SAIC": "Science Applications International",
+    "LMT":  "Lockheed Martin",
+    "NOC":  "Northrop Grumman",
+    "RTX":  "Raytheon Technologies",
+    "GD":   "General Dynamics",
+    "LHX":  "L3Harris Technologies",
+    "HII":  "Huntington Ingalls",
+    "BA":   "Boeing",
+    "KTOS": "Kratos Defense",
+    "MRCY": "Mercury Systems",
+    "CACI": "CACI International",
+    "PSN":  "Parsons Corporation",
+    "PLTR": "Palantir Technologies",
+    "RKLB": "Rocket Lab",
+    "AMTM": "Amentum",
+    "FLR":  "Fluor Corporation",
+    "KBR":  "KBR Inc",
+    "ACM":  "AECOM",
+    "BWXT": "BWX Technologies",
+    "VSEC": "VSE Corporation",
+    "MMS":  "Maximus Inc",
+    "HON":  "Honeywell International",
+    "IBM":  "International Business Machines",
+}
+
+# =========================================================
+# SEC 8-K MONITORING — Contract award press releases
+# Companies must file 8-K for material contracts
+# Filed within 4 business days — faster than USASpending
+# =========================================================
+
+_8k_cache = {}
+
+def fetch_8k_filings():
+    """Check recent 8-K filings for contract award announcements"""
+    results = []
+    tickers_to_check = list(set(KNOWN.values()))  # unique tickers only
+
+    for ticker in tickers_to_check:
+        try:
+            since = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+            today = datetime.now().strftime("%Y-%m-%d")
+            # Search by company name for better SEC coverage
+            company_name = TICKER_TO_NAME.get(ticker, ticker)
+            encoded_name = urllib.parse.quote(f'"{company_name}"')
+            url   = (f"https://efts.sec.gov/LATEST/search-index?q={encoded_name}"
+                     f"&dateRange=custom&startdt={since}&enddt={today}&forms=8-K")
+            req = urllib.request.Request(url, headers=SEC_HEADERS)
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read())
+
+            for hit in data.get("hits", {}).get("hits", [])[:3]:
+                src       = hit.get("_source", {})
+                accession = hit.get("_id", "")
+                filed     = src.get("file_date", "")
+                cache_key = f"8K:{ticker}:{accession}"
+
+                uid_8k = hashlib.sha256(f"8K|{ticker}|{accession}".encode()).hexdigest()
+                with DB_LOCK:
+                    already = DB.execute("SELECT 1 FROM seen_8k WHERE uid=?", (uid_8k,)).fetchone()
+                if already:
+                    continue
+                # Mark seen immediately to prevent duplicate processing
+                with DB_LOCK:
+                    DB.execute("INSERT OR IGNORE INTO seen_8k VALUES (?,?,?,?)",
+                               (uid_8k, ticker, filed, datetime.now().isoformat()))
+                    DB.commit()
+
+                # Fetch the 8-K filing text to check for contract language
+                cik = src.get("entity_id","")
+                if not cik: continue
+
+                acc = accession.replace("-","").replace(":","")
+                if len(acc) == 18:
+                    dashed = f"{acc[:10]}-{acc[10:12]}-{acc[12:]}"
+                else:
+                    continue
+
+                idx_url = (f"https://www.sec.gov/Archives/edgar/data"
+                           f"/{cik}/{acc}/{dashed}-index.htm")
+                try:
+                    req2 = urllib.request.Request(idx_url, headers=SEC_HEADERS)
+                    with urllib.request.urlopen(req2, timeout=8) as r2:
+                        idx_html = r2.read().decode("utf-8", errors="ignore")
+                except:
+                    continue
+
+                # Find the main 8-K document — prefer files with "8k" in name
+                all_links = re.findall(r'href="([^"]*\.htm[l]?)"', idx_html, re.IGNORECASE)
+                # Sort: prefer links with "8k" or "8-k" in filename, exclude index files
+                def link_priority(l):
+                    ll = l.lower()
+                    if "index" in ll: return 3
+                    if "8k" in ll or "8-k" in ll: return 0
+                    return 1
+                all_links.sort(key=link_priority)
+                text = ""
+                for link in all_links[:5]:
+                    if "index" in link.lower(): continue
+                    full_url = (link if link.startswith("http")
+                                else f"https://www.sec.gov{link}" if link.startswith("/")
+                                else f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{link}")
+                    try:
+                        req3 = urllib.request.Request(full_url, headers=SEC_HEADERS)
+                        with urllib.request.urlopen(req3, timeout=8) as r3:
+                            text = r3.read().decode("utf-8", errors="ignore")
+                        if len(text) > 500:  # got real content
+                            break
+                    except:
+                        continue
+
+                if not text: continue
+
+                # Check for contract-related language
+                text_lower = text.lower()
+                contract_keywords = [
+                    "was awarded", "contract award", "awarded a contract",
+                    "government contract", "federal contract", "defense contract",
+                    "department of defense", "department of the army",
+                    "department of the navy", "air force contract",
+                ]
+                if not any(kw in text_lower for kw in contract_keywords):
+                    continue
+
+                # Extract contract amount — search near contract keywords only
+                # This avoids false positives from revenue/backlog/debt figures
+                amt = 0
+                # Look for patterns like "awarded a $500 million contract" or "$1.2 billion contract"
+                contract_amount_patterns = [
+                    r'awarded[^$]{0,50}\$([0-9,]+(?:\.[0-9]+)?)\s*(million|billion)',
+                    r'contract[^$]{0,30}\$([0-9,]+(?:\.[0-9]+)?)\s*(million|billion)',
+                    r'\$([0-9,]+(?:\.[0-9]+)?)\s*(million|billion)[^.]{0,50}contract',
+                    r'\$([0-9,]+(?:\.[0-9]+)?)\s*(million|billion)[^.]{0,50}award',
+                ]
+                for pat in contract_amount_patterns:
+                    for m in re.finditer(pat, text_lower):
+                        try:
+                            v = float(m.group(1).replace(",",""))
+                            mult = 1_000_000_000 if m.group(2) == "billion" else 1_000_000
+                            v *= mult
+                            if v > amt:
+                                amt = v
+                        except:
+                            continue
+                    if amt >= MIN_AWARD_USD:
+                        break
+
+                if amt < MIN_AWARD_USD: continue
+
+                uid = hashlib.sha256(f"8K|{ticker}|{accession}".encode()).hexdigest()
+                company_name = src.get("display_names", [ticker])[0]
+
+                results.append({
+                    "uid":        uid,
+                    "recipient":  company_name,
+                    "amount":     amt,
+                    "amount_usd": amt,
+                    "agency":     "See filing",
+                    "desc":       f"8-K contract award filing",
+                    "awarded":    filed,
+                    "expires":    "",
+                    "country":    "USA",
+                    "source":     "SEC 8-K Filing",
+                    "ticker":     ticker,  # already known
+                })
+                log.info(f"8-K: ${ticker} contract award {fmt_usd(amt)} filed {filed}")
+
+            time.sleep(0.2)
+        except Exception as e:
+            log.debug(f"8-K check failed {ticker}: {e}")
+
+    log.info(f"8-K: {len(results)} contract filings found")
+    return results
 
 # =========================================================
 # MAIN CHECK
@@ -821,8 +970,7 @@ def check():
     log.info(f"Check — {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}")
 
     all_awards = []
-    for label, fn in [("DoD", fetch_dod_awards), ("UK", fetch_uk_awards),
-                      ("USA", fetch_us_awards), ("Canada", fetch_canada_awards)]:
+    for label, fn in [("DoD", fetch_dod_awards), ("USA", fetch_us_awards), ("8-K", fetch_8k_filings)]:
         try:
             awards = fn()
             all_awards.extend(awards)
@@ -834,22 +982,24 @@ def check():
 
     for award in all_awards:
         uid = award.get("uid") or hashlib.sha256(
-            f"{award['country']}|{award['recipient']}|{award['amount']}|{award['awarded']}".encode()
+            f"{award['country']}|{award['recipient']}|{award['amount']}|{award.get('awarded','')}".encode()
         ).hexdigest()
 
-        if already_seen(uid): continue
+        if already_seen(uid):
+            continue
 
-        ticker = find_ticker(award["recipient"])
+        ticker = award.get("ticker") or find_ticker(award["recipient"])
         if not ticker:
-            mark_seen(uid, award["recipient"], award["amount_usd"],
+            mark_seen(uid, award["recipient"], award.get("amount_usd",0),
                       award.get("agency",""), award["country"], "", 0)
             continue
 
         price, cap = get_stock_info(ticker)
-        years = get_years(award.get("awarded",""), award.get("expires",""))
-        score, rating = score_deal(award["amount_usd"], cap, years, False)
+        years      = get_years(award.get("awarded",""), award.get("expires",""))
+        score, rating = score_deal(award.get("amount_usd",0), cap, years)
 
-        log.info(f"NEW [{award['country']}] {award['recipient']} | {fmt_usd(award['amount_usd'])} | ${ticker} | {score}/100 {rating}")
+        log.info(f"NEW [{award['country']}] {award['recipient']} | "
+                 f"{fmt_usd(award.get('amount_usd',0))} | ${ticker} | {score}/100 {rating}")
 
         if score >= MIN_DEAL_SCORE:
             try:
@@ -858,7 +1008,7 @@ def check():
             except Exception as e:
                 log.error(f"Push failed: {e}")
 
-        mark_seen(uid, award["recipient"], award["amount_usd"],
+        mark_seen(uid, award["recipient"], award.get("amount_usd",0),
                   award.get("agency",""), award["country"], ticker, score)
 
     log.info(f"Done — {new} contract alerts sent")
@@ -869,10 +1019,12 @@ def check():
 # =========================================================
 
 def run_bot():
-    # Startup notification
     try:
-        ntfy("Contract Bot Live", "Monitoring DoD + UK + SEC insider buys", tags="white_check_mark")
-    except: pass
+        ntfy("Contract Bot Live",
+             "Monitoring DoD (globalsecurity) + USASpending + SEC insider buys",
+             tags="white_check_mark")
+    except:
+        pass
 
     last_cleanup = datetime.now()
     while True:
@@ -895,7 +1047,7 @@ def run_bot():
 
 print("=" * 55)
 print("  CONTRACT ALERT BOT")
-print(f"  DoD + UK + USA (non-DoD) + Canada")
+print(f"  Sources: DoD (globalsecurity) + USASpending")
 print(f"  {len(INSIDER_WATCHLIST)} insider tickers | {len(KNOWN)} known companies")
 print(f"  Min award: $5M | Min score: {MIN_DEAL_SCORE} | Every {CHECK_MINUTES}min")
 print("=" * 55)
