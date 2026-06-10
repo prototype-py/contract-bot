@@ -19,7 +19,6 @@ from datetime import datetime, timedelta
 NTFY_TOPIC          = "my-contract-alerts"
 MIN_AWARD_USD       = 5_000_000
 CHECK_MINUTES       = 30
-LOOKBACK_HOURS      = 2
 DATABASE            = "contracts.db"
 MIN_DEAL_SCORE      = 20
 MIN_INSIDER_BUY_USD = 250_000
@@ -36,7 +35,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # =========================================================
-# KEEP-ALIVE WEB SERVER
+# HEALTH SERVER
 # =========================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -45,112 +44,92 @@ class HealthHandler(BaseHTTPRequestHandler):
             with DB_LOCK:
                 DB.execute("DELETE FROM seen_awards")
                 DB.commit()
-            log.info("DB reset — seen_awards cleared")
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"seen_awards cleared. Bot will re-alert on next check.")
+            self.wfile.write(b"Reset done.")
         else:
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(f"Contract Bot running. {datetime.now()}".encode())
-    def log_message(self, format, *args):
-        pass
+            self.wfile.write(f"Bot running. {datetime.now()}".encode())
+    def log_message(self, *a): pass
 
 def start_web_server():
-    server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
-    log.info("Health server running on port 8080")
-    server.serve_forever()
+    HTTPServer(("0.0.0.0", 8080), HealthHandler).serve_forever()
 
 # =========================================================
 # KNOWN COMPANIES
 # =========================================================
 
 KNOWN = {
-    "Booz Allen":          {"ticker": "BAH",    "exchange": "NYSE",   "currency": "USD"},
-    "Leidos":              {"ticker": "LDOS",   "exchange": "NYSE",   "currency": "USD"},
-    "SAIC":                {"ticker": "SAIC",   "exchange": "NYSE",   "currency": "USD"},
-    "Science Applications":{"ticker": "SAIC",   "exchange": "NYSE",   "currency": "USD"},
-    "Parsons":             {"ticker": "PSN",    "exchange": "NYSE",   "currency": "USD"},
-    "Palantir":            {"ticker": "PLTR",   "exchange": "NYSE",   "currency": "USD"},
-    "Accenture":           {"ticker": "ACN",    "exchange": "NYSE",   "currency": "USD"},
-    "Raytheon":            {"ticker": "RTX",    "exchange": "NYSE",   "currency": "USD"},
-    "RTX Corp":            {"ticker": "RTX",    "exchange": "NYSE",   "currency": "USD"},
-    "Northrop Grumman":    {"ticker": "NOC",    "exchange": "NYSE",   "currency": "USD"},
-    "Lockheed":            {"ticker": "LMT",    "exchange": "NYSE",   "currency": "USD"},
-    "L3Harris":            {"ticker": "LHX",    "exchange": "NYSE",   "currency": "USD"},
-    "General Dynamics":    {"ticker": "GD",     "exchange": "NYSE",   "currency": "USD"},
-    "Textron":             {"ticker": "TXT",    "exchange": "NYSE",   "currency": "USD"},
-    "TransDigm":           {"ticker": "TDG",    "exchange": "NYSE",   "currency": "USD"},
-    "Mercury Systems":     {"ticker": "MRCY",   "exchange": "NASDAQ", "currency": "USD"},
-    "Kratos":              {"ticker": "KTOS",   "exchange": "NASDAQ", "currency": "USD"},
-    "Leonardo DRS":        {"ticker": "DRS",    "exchange": "NASDAQ", "currency": "USD"},
-    "Curtiss-Wright":      {"ticker": "CW",     "exchange": "NYSE",   "currency": "USD"},
-    "KBR":                 {"ticker": "KBR",    "exchange": "NYSE",   "currency": "USD"},
-    "Fluor":               {"ticker": "FLR",    "exchange": "NYSE",   "currency": "USD"},
-    "Jacobs":              {"ticker": "J",      "exchange": "NYSE",   "currency": "USD"},
-    "Tetra Tech":          {"ticker": "TTEK",   "exchange": "NASDAQ", "currency": "USD"},
-    "AECOM":               {"ticker": "ACM",    "exchange": "NYSE",   "currency": "USD"},
-    "Maximus":             {"ticker": "MMS",    "exchange": "NYSE",   "currency": "USD"},
-    "ICF":                 {"ticker": "ICFI",   "exchange": "NASDAQ", "currency": "USD"},
-    "CACI":                {"ticker": "CACI",   "exchange": "NYSE",   "currency": "USD"},
-    "Heico":               {"ticker": "HEI",    "exchange": "NYSE",   "currency": "USD"},
-    "BWX Technologies":    {"ticker": "BWXT",   "exchange": "NYSE",   "currency": "USD"},
-    "Rocket Lab":          {"ticker": "RKLB",   "exchange": "NASDAQ", "currency": "USD"},
-    "Triumph Group":       {"ticker": "TGI",    "exchange": "NYSE",   "currency": "USD"},
-    "Kaman":               {"ticker": "KAMN",   "exchange": "NYSE",   "currency": "USD"},
-    "VSE Corporation":     {"ticker": "VSEC",   "exchange": "NASDAQ", "currency": "USD"},
-    "DXC":                 {"ticker": "DXC",    "exchange": "NYSE",   "currency": "USD"},
-    "IBM":                 {"ticker": "IBM",    "exchange": "NYSE",   "currency": "USD"},
-    "Honeywell":           {"ticker": "HON",    "exchange": "NASDAQ", "currency": "USD"},
-    "General Electric":    {"ticker": "GE",     "exchange": "NYSE",   "currency": "USD"},
-    "GE HealthCare":       {"ticker": "GEHC",   "exchange": "NASDAQ", "currency": "USD"},
-    "Boeing":              {"ticker": "BA",     "exchange": "NYSE",   "currency": "USD"},
-    "Huntington Ingalls":  {"ticker": "HII",    "exchange": "NYSE",   "currency": "USD"},
-    "Huntington-Ingalls":  {"ticker": "HII",    "exchange": "NYSE",   "currency": "USD"},
-    "Humana":              {"ticker": "HUM",    "exchange": "NYSE",   "currency": "USD"},
-    "Oracle":              {"ticker": "ORCL",   "exchange": "NYSE",   "currency": "USD"},
-    "Microsoft":           {"ticker": "MSFT",   "exchange": "NASDAQ", "currency": "USD"},
-    "Amazon":              {"ticker": "AMZN",   "exchange": "NASDAQ", "currency": "USD"},
-    "Google":              {"ticker": "GOOGL",  "exchange": "NASDAQ", "currency": "USD"},
-    "Alphabet":            {"ticker": "GOOGL",  "exchange": "NASDAQ", "currency": "USD"},
-    "Vectrus":             {"ticker": "VEC",    "exchange": "NYSE",   "currency": "USD"},
-    "Amentum":             {"ticker": "AMTM",   "exchange": "NYSE",   "currency": "USD"},
-    "Pratt and Whitney":   {"ticker": "RTX",    "exchange": "NYSE",   "currency": "USD"},
-    "Pratt & Whitney":     {"ticker": "RTX",    "exchange": "NYSE",   "currency": "USD"},
-    "Collins Aerospace":   {"ticker": "RTX",    "exchange": "NYSE",   "currency": "USD"},
-    "Sikorsky":            {"ticker": "LMT",    "exchange": "NYSE",   "currency": "USD"},
-    "Aerojet":             {"ticker": "LHX",    "exchange": "NYSE",   "currency": "USD"},
-    "Spirit AeroSystems":  {"ticker": "SPR",    "exchange": "NYSE",   "currency": "USD"},
-    "BAE Systems":         {"ticker": "BA.L",   "exchange": "LSE",    "currency": "GBP"},
-    "Rolls-Royce":         {"ticker": "RR.L",   "exchange": "LSE",    "currency": "GBP"},
-    "QinetiQ":             {"ticker": "QQ.L",   "exchange": "LSE",    "currency": "GBP"},
-    "Babcock":             {"ticker": "BAB.L",  "exchange": "LSE",    "currency": "GBP"},
-    "Serco":               {"ticker": "SRP.L",  "exchange": "LSE",    "currency": "GBP"},
-    "Capita":              {"ticker": "CPI.L",  "exchange": "LSE",    "currency": "GBP"},
-    "Kier":                {"ticker": "KIE.L",  "exchange": "LSE",    "currency": "GBP"},
-    "Balfour Beatty":      {"ticker": "BBY.L",  "exchange": "LSE",    "currency": "GBP"},
-    "CAE":                 {"ticker": "CAE.TO", "exchange": "TSX",    "currency": "CAD"},
-    "MDA":                 {"ticker": "MDA.TO", "exchange": "TSX",    "currency": "CAD"},
-    "Magellan Aerospace":  {"ticker": "MAL.TO", "exchange": "TSX",    "currency": "CAD"},
-    "Heroux-Devtek":       {"ticker": "HRX.TO", "exchange": "TSX",    "currency": "CAD"},
-    "Calian":              {"ticker": "CGY.TO", "exchange": "TSX",    "currency": "CAD"},
-    "SNC-Lavalin":         {"ticker": "SNC.TO", "exchange": "TSX",    "currency": "CAD"},
-    "Elbit Systems":       {"ticker": "ESLT",   "exchange": "NASDAQ", "currency": "USD"},
-    "CyberArk":            {"ticker": "CYBR",   "exchange": "NASDAQ", "currency": "USD"},
-    "Check Point":         {"ticker": "CHKP",   "exchange": "NASDAQ", "currency": "USD"},
-    "NICE Systems":        {"ticker": "NICE",   "exchange": "NASDAQ", "currency": "USD"},
-    "Radware":             {"ticker": "RDWR",   "exchange": "NASDAQ", "currency": "USD"},
+    "Booz Allen":          "BAH",
+    "Leidos":              "LDOS",
+    "SAIC":                "SAIC",
+    "Science Applications":"SAIC",
+    "Parsons":             "PSN",
+    "Palantir":            "PLTR",
+    "Accenture":           "ACN",
+    "Raytheon":            "RTX",
+    "RTX Corp":            "RTX",
+    "Northrop Grumman":    "NOC",
+    "Lockheed":            "LMT",
+    "L3Harris":            "LHX",
+    "General Dynamics":    "GD",
+    "Textron":             "TXT",
+    "Mercury Systems":     "MRCY",
+    "Kratos":              "KTOS",
+    "Leonardo DRS":        "DRS",
+    "Curtiss-Wright":      "CW",
+    "KBR":                 "KBR",
+    "Fluor":               "FLR",
+    "Jacobs":              "J",
+    "Tetra Tech":          "TTEK",
+    "AECOM":               "ACM",
+    "Maximus":             "MMS",
+    "ICF":                 "ICFI",
+    "CACI":                "CACI",
+    "Heico":               "HEI",
+    "BWX Technologies":    "BWXT",
+    "Rocket Lab":          "RKLB",
+    "VSE Corporation":     "VSEC",
+    "IBM":                 "IBM",
+    "Honeywell":           "HON",
+    "General Electric":    "GE",
+    "GE HealthCare":       "GEHC",
+    "Boeing":              "BA",
+    "Huntington Ingalls":  "HII",
+    "Huntington-Ingalls":  "HII",
+    "Oracle":              "ORCL",
+    "Microsoft":           "MSFT",
+    "Amazon":              "AMZN",
+    "Alphabet":            "GOOGL",
+    "Google":              "GOOGL",
+    "Amentum":             "AMTM",
+    "Pratt and Whitney":   "RTX",
+    "Pratt & Whitney":     "RTX",
+    "Collins Aerospace":   "RTX",
+    "Sikorsky":            "LMT",
+    "Aerojet":             "LHX",
+    "Spirit AeroSystems":  "SPR",
+    "BAE Systems":         "BA.L",
+    "Rolls-Royce":         "RR.L",
+    "QinetiQ":             "QQ.L",
+    "Babcock":             "BAB.L",
+    "Serco":               "SRP.L",
+    "CAE":                 "CAE.TO",
+    "MDA":                 "MDA.TO",
+    "Heroux-Devtek":       "HRX.TO",
+    "Calian":              "CGY.TO",
+    "Elbit Systems":       "ESLT",
+    "CyberArk":            "CYBR",
+    "Check Point":         "CHKP",
 }
-
-# Private companies — skip stock scoring
-PRIVATE_COMPANIES = {"ManTech", "Perspecta", "Engility", "KEYW"}
 
 INSIDER_WATCHLIST = [
     "KTOS","MRCY","DRS","PSN","RKLB","VSEC","LDOS","BAH","SAIC",
-    "CACI","LMT","NOC","RTX","GD","LHX","HII","TXT","KBR","TTEK",
-    "ACM","PLTR","HON","GE","GEHC","BA","BWXT","CW","HEI","TGI",
-    "ICFI","MMS","SPR","KAMN","FLR","DXC","IBM","AMTM",
-    "ESLT","CYBR","CHKP","NICE","RDWR",
+    "CACI","LMT","NOC","RTX","GD","LHX","HII","KBR","TTEK",
+    "ACM","PLTR","HON","GE","GEHC","BA","BWXT","CW","HEI",
+    "ICFI","MMS","SPR","FLR","IBM","AMTM",
+    "ESLT","CYBR","CHKP",
 ]
 
 # =========================================================
@@ -159,38 +138,16 @@ INSIDER_WATCHLIST = [
 
 def init_db():
     db = sqlite3.connect(DATABASE, check_same_thread=False)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS seen_awards (
-            uid TEXT PRIMARY KEY, recipient TEXT, amount_usd REAL,
-            agency TEXT, country TEXT, ticker TEXT, exchange TEXT,
-            deal_score REAL, seen_at TEXT
-        )
-    """)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS ticker_cache (
-            name TEXT PRIMARY KEY, ticker TEXT, exchange TEXT, found_at TEXT
-        )
-    """)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS seen_insider (
-            uid TEXT PRIMARY KEY, ticker TEXT, insider_name TEXT,
-            title TEXT, amount_usd REAL, seen_at TEXT
-        )
-    """)
-    # Add indexes for faster cleanup queries
-    db.execute("CREATE INDEX IF NOT EXISTS idx_seen_awards_seen_at ON seen_awards(seen_at)")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_seen_insider_seen_at ON seen_insider(seen_at)")
+    db.execute("""CREATE TABLE IF NOT EXISTS seen_awards (
+        uid TEXT PRIMARY KEY, recipient TEXT, amount_usd REAL,
+        agency TEXT, country TEXT, ticker TEXT, deal_score REAL, seen_at TEXT)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS seen_insider (
+        uid TEXT PRIMARY KEY, ticker TEXT, insider_name TEXT,
+        title TEXT, amount_usd REAL, seen_at TEXT)""")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_sa_seen ON seen_awards(seen_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_si_seen ON seen_insider(seen_at)")
     db.commit()
     return db
-
-def cleanup_db():
-    """Remove records older than 180 days — run weekly"""
-    cutoff = (datetime.now() - timedelta(days=180)).isoformat()
-    with DB_LOCK:
-        DB.execute("DELETE FROM seen_awards WHERE seen_at < ?", (cutoff,))
-        DB.execute("DELETE FROM seen_insider WHERE seen_at < ?", (cutoff,))
-        DB.commit()
-    log.info("DB cleanup done")
 
 DB      = init_db()
 DB_LOCK = threading.Lock()
@@ -203,49 +160,28 @@ def already_seen_insider(uid):
     with DB_LOCK:
         return DB.execute("SELECT 1 FROM seen_insider WHERE uid=?", (uid,)).fetchone() is not None
 
-def mark_seen(uid, award, amount_usd, country, ticker, exchange, deal_score):
+def mark_seen(uid, recipient, amount_usd, agency, country, ticker, score):
     with DB_LOCK:
-        DB.execute("""
-            INSERT OR IGNORE INTO seen_awards
-            (uid, recipient, amount_usd, agency, country, ticker, exchange, deal_score, seen_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (uid, award.get("recipient",""), amount_usd, award.get("agency",""),
-              country, ticker, exchange, deal_score, datetime.now().isoformat()))
+        DB.execute("INSERT OR IGNORE INTO seen_awards VALUES (?,?,?,?,?,?,?,?)",
+            (uid, recipient, amount_usd, agency, country, ticker, score, datetime.now().isoformat()))
         DB.commit()
 
-def mark_seen_insider(uid, ticker, insider_name, title, amount_usd):
+def mark_seen_insider(uid, ticker, name, title, amount):
     with DB_LOCK:
-        DB.execute("""
-            INSERT OR IGNORE INTO seen_insider
-            (uid, ticker, insider_name, title, amount_usd, seen_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (uid, ticker, insider_name, title, amount_usd, datetime.now().isoformat()))
+        DB.execute("INSERT OR IGNORE INTO seen_insider VALUES (?,?,?,?,?,?)",
+            (uid, ticker, name, title, amount, datetime.now().isoformat()))
         DB.commit()
 
-def get_cached_ticker(name):
+def cleanup_old():
+    cutoff = (datetime.now() - timedelta(days=30)).isoformat()
     with DB_LOCK:
-        row = DB.execute("SELECT ticker, exchange FROM ticker_cache WHERE name=?", (name,)).fetchone()
-    return (row[0], row[1]) if row else None
-
-def cache_ticker(name, ticker, exchange):
-    with DB_LOCK:
-        DB.execute("INSERT OR REPLACE INTO ticker_cache (name, ticker, exchange, found_at) VALUES (?, ?, ?, ?)",
-                   (name, ticker, exchange, datetime.now().isoformat()))
+        DB.execute("DELETE FROM seen_awards WHERE seen_at < ?", (cutoff,))
+        DB.execute("DELETE FROM seen_insider WHERE seen_at < ?", (cutoff,))
         DB.commit()
 
 # =========================================================
 # HELPERS
 # =========================================================
-
-def retry(fn, attempts=3, delay=2):
-    for i in range(attempts):
-        try:
-            return fn()
-        except Exception as e:
-            log.warning(f"Attempt {i+1}/{attempts} failed: {e}")
-            if i == attempts - 1:
-                raise
-            time.sleep(delay ** i)
 
 def fmt_usd(n):
     v = float(n or 0)
@@ -253,212 +189,319 @@ def fmt_usd(n):
     if v >= 1e6: return f"${v/1e6:.2f}M"
     return f"${v/1e3:.0f}K"
 
-def fmt_local(n, currency):
-    symbols = {"USD":"$","GBP":"£","CAD":"CA$","ILS":"₪"}
-    s = symbols.get(currency, "$")
-    v = float(n or 0)
-    if v >= 1e9: return f"{s}{v/1e9:.2f}B"
-    if v >= 1e6: return f"{s}{v/1e6:.2f}M"
-    return f"{s}{v/1e3:.0f}K"
+def find_ticker(name):
+    name_lower = name.lower()
+    for company, ticker in KNOWN.items():
+        if company.lower() in name_lower:
+            return ticker
+    return None
 
-# ── Caches ────────────────────────────────────────────────
-_stock_cache    = {}
-_fx_cache       = {}
-_revenue_cache  = {}
-STOCK_CACHE_TTL    = 600
-FX_CACHE_TTL       = 3600
-REVENUE_CACHE_TTL  = 86400  # 24 hours
-
-def get_fx_rate(currency):
-    if currency == "USD": return 1.0
-    if currency in _fx_cache:
-        rate, ts = _fx_cache[currency]
-        if (datetime.now() - ts).total_seconds() < FX_CACHE_TTL:
-            return rate
-    try:
-        pairs = {"GBP":"GBPUSD=X","CAD":"CADUSD=X","ILS":"ILSUSD=X"}
-        url   = f"https://query1.finance.yahoo.com/v8/finance/chart/{pairs.get(currency,'GBPUSD=X')}?interval=1d&range=1d"
-        req   = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
-        rate = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
-        _fx_cache[currency] = (rate, datetime.now())
-        return rate
-    except:
-        return {"GBP":1.27,"CAD":0.73,"ILS":0.27}.get(currency, 1.0)
+_stock_cache = {}
 
 def get_stock_info(ticker):
     if ticker in _stock_cache:
-        price, cap, curr, exch, ts = _stock_cache[ticker]
-        if (datetime.now() - ts).total_seconds() < STOCK_CACHE_TTL:
-            return price, cap, curr, exch
+        price, cap, ts = _stock_cache[ticker]
+        if (datetime.now() - ts).total_seconds() < 600:
+            return price, cap
     try:
-        url = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
-               f"?modules=price,financialData")
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
         req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read())
-        result     = data["quoteSummary"]["result"][0]
-        price_data = result["price"]
-        price = price_data.get("regularMarketPrice",{}).get("raw", 0)
-        cap   = price_data.get("marketCap",{}).get("raw", 0)
-        curr  = price_data.get("currency","USD")
-        exch  = price_data.get("exchangeName","")
-        # Also grab annual revenue for better scoring
-        fin   = result.get("financialData", {})
-        rev   = fin.get("totalRevenue",{}).get("raw", 0)
-        _stock_cache[ticker] = (price, cap, curr, exch, datetime.now())
-        _revenue_cache[ticker] = (rev, datetime.now())
-        return price, cap, curr, exch
+        meta  = data["chart"]["result"][0]["meta"]
+        price = meta.get("regularMarketPrice", 0)
+        cap   = meta.get("marketCap", 0)
+        _stock_cache[ticker] = (price, cap, datetime.now())
+        return price, cap
     except:
-        try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
-            req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = json.loads(r.read())
-            meta  = data["chart"]["result"][0]["meta"]
-            price = meta.get("regularMarketPrice",0)
-            cap   = meta.get("marketCap",0)
-            curr  = meta.get("currency","USD")
-            exch  = meta.get("exchangeName","")
-            _stock_cache[ticker] = (price, cap, curr, exch, datetime.now())
-            return price, cap, curr, exch
-        except:
-            return None, None, None, None
-
-def get_revenue(ticker):
-    if ticker in _revenue_cache:
-        rev, ts = _revenue_cache[ticker]
-        if (datetime.now() - ts).total_seconds() < REVENUE_CACHE_TTL:
-            return rev
-    return 0
+        return None, None
 
 # =========================================================
-# DEAL SCORING
+# SCORING
 # =========================================================
 
-def get_contract_years(awarded, expires):
-    try:
-        if not awarded or not expires: return 1.0
-        start = datetime.strptime(awarded[:10], "%Y-%m-%d")
-        end   = datetime.strptime(expires[:10], "%Y-%m-%d")
-        return max((end - start).days / 365.25, 0.1)
-    except:
-        return 1.0
-
-def score_deal(amount_usd, market_cap, years, insider, ticker=None):
+def score_deal(amount_usd, market_cap, years, has_insider):
     score = 0
-    reasons = []
 
-    # Market cap scoring
     if not market_cap or market_cap <= 0:
-        score += 25
-        reasons.append("Market cap unavailable — verify manually")
+        score += 20  # unknown cap — moderate base
     else:
         pct = (amount_usd / market_cap) * 100
-        if pct >= 50:   score += 60; reasons.append(f"Contract is {pct:.0f}% of market cap — TRANSFORMATIVE")
-        elif pct >= 25: score += 50; reasons.append(f"Contract is {pct:.0f}% of market cap — EXCEPTIONAL")
-        elif pct >= 10: score += 35; reasons.append(f"Contract is {pct:.0f}% of market cap — VERY STRONG")
-        elif pct >= 5:  score += 20; reasons.append(f"Contract is {pct:.0f}% of market cap — SOLID")
-        elif pct >= 2:  score += 10; reasons.append(f"Contract is {pct:.1f}% of market cap — MODERATE")
-        else:           score += 2;  reasons.append(f"Contract is {pct:.1f}% of market cap — MINOR")
+        if   pct >= 50: score += 60
+        elif pct >= 25: score += 50
+        elif pct >= 10: score += 35
+        elif pct >= 5:  score += 20
+        elif pct >= 2:  score += 10
+        else:           score += 2
 
-    # Revenue scoring bonus
-    if ticker:
-        revenue = get_revenue(ticker)
-        if revenue and revenue > 0:
-            rev_pct = (amount_usd / revenue) * 100
-            if rev_pct >= 50:   score += 20; reasons.append(f"Contract is {rev_pct:.0f}% of annual revenue")
-            elif rev_pct >= 25: score += 12; reasons.append(f"Contract is {rev_pct:.0f}% of annual revenue")
-            elif rev_pct >= 10: score += 6;  reasons.append(f"Contract is {rev_pct:.0f}% of annual revenue")
+    if   amount_usd >= 500_000_000: score += 20
+    elif amount_usd >= 100_000_000: score += 15
+    elif amount_usd >= 50_000_000:  score += 10
+    elif amount_usd >= 10_000_000:  score += 5
 
-    # Absolute size
-    if amount_usd >= 500_000_000: score += 20; reasons.append("Mega contract $500M+")
-    elif amount_usd >= 100_000_000: score += 15; reasons.append("Large contract $100M+")
-    elif amount_usd >= 50_000_000:  score += 10; reasons.append("Significant contract $50M+")
-    elif amount_usd >= 10_000_000:  score += 5;  reasons.append("Notable contract $10M+")
+    if   years >= 5: score += 10
+    elif years >= 3: score += 7
+    elif years >= 2: score += 4
+    elif years >= 1: score += 2
 
-    # Duration
-    if years >= 5:   score += 10; reasons.append(f"{years:.0f} year contract — long term revenue")
-    elif years >= 3: score += 7;  reasons.append(f"{years:.0f} year contract — multi-year revenue")
-    elif years >= 2: score += 4;  reasons.append(f"{years:.0f} year contract")
-    elif years >= 1: score += 2;  reasons.append(f"{years:.0f} year contract")
-
-    # Insider buying
-    if insider:
-        insider_lower = insider.lower()
-        if any(t in insider_lower for t in ["chief executive","ceo"]):
-            score += 15; reasons.append("CEO open market buy — very high conviction signal")
-        elif any(t in insider_lower for t in ["chief financial","cfo","chief operating","coo","president"]):
-            score += 12; reasons.append("C-Suite open market buy — high conviction signal")
-        else:
-            score += 8;  reasons.append("Director/Officer open market buy — positive signal")
+    if has_insider: score += 10
 
     score = min(score, 100)
-    if score >= 70:   rating = "STRONG BUY"
+    if   score >= 70: rating = "STRONG BUY"
     elif score >= 50: rating = "HIGH VALUE"
     elif score >= 30: rating = "NOTABLE"
     elif score >= 15: rating = "WATCH"
     else:             rating = "LOW IMPACT"
-    return score, rating, reasons
+    return score, rating
 
-# =========================================================
-# COMPANY LOOKUP
-# =========================================================
-
-def search_edgar(company_name):
+def get_years(awarded, expires):
     try:
-        clean = company_name
-        for s in [" LLC"," Inc"," Corp"," Ltd"," LP"," LLP"," Co"," Group",","," plc"," PLC"," LIMITED"," Incorporated"]:
-            clean = clean.replace(s, "").strip()
-        params = urllib.parse.urlencode({
-            "company": clean, "type": "", "dateb": "",
-            "owner": "include", "count": "5",
-            "search_text": "", "action": "getcompany"
-        })
-        url = f"https://www.sec.gov/cgi-bin/browse-edgar?{params}&output=atom"
-        req = urllib.request.Request(url, headers={"User-Agent":"ContractAlertBot/2.0 admin@contractbot.app"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            content = r.read().decode("utf-8")
-        matches = re.findall(r'\(([A-Z]{1,5})\)', content)
-        if not matches: return None, None
-        ticker = matches[0]
-        _, cap, _, exch = get_stock_info(ticker)
-        if cap and cap > 0:
-            log.info(f"  EDGAR found: {company_name} → ${ticker} ({exch})")
-            return ticker, exch
-        return None, None
-    except Exception as e:
-        log.debug(f"EDGAR lookup failed for {company_name}: {e}")
-        return None, None
-
-def find_company(name):
-    # Check private companies first
-    for private in PRIVATE_COMPANIES:
-        if private.lower() in name.lower():
-            return "PRIVATE", "PRIVATE", "USD"
-
-    name_lower = name.lower()
-    for company, info in KNOWN.items():
-        if company.lower() in name_lower:
-            return info["ticker"], info["exchange"], info["currency"]
-
-    cached = get_cached_ticker(name)
-    if cached:
-        ticker, exchange = cached
-        if ticker == "NONE": return None, None, None
-        return ticker, exchange, "USD"
-
-    log.info(f"  Searching EDGAR for: {name}")
-    ticker, exchange = search_edgar(name)
-    if ticker:
-        cache_ticker(name, ticker, exchange or "NASDAQ")
-        return ticker, exchange or "NASDAQ", "USD"
-    cache_ticker(name, "NONE", "NONE")
-    return None, None, None
+        s = datetime.strptime(awarded[:10], "%Y-%m-%d")
+        e = datetime.strptime(expires[:10], "%Y-%m-%d")
+        return max((e - s).days / 365.25, 0)
+    except:
+        return 0
 
 # =========================================================
-# SEC INSIDER TRADING — PROPER XML PARSER
+# PUSH
+# =========================================================
+
+def ntfy(title, body, priority="default", tags="money_bag", link=None):
+    headers = {
+        "Title":        title.encode("ascii","ignore").decode("ascii"),
+        "Priority":     priority,
+        "Tags":         tags,
+        "Content-Type": "text/plain; charset=utf-8",
+    }
+    if link:
+        headers["Click"] = link
+    req = urllib.request.Request(
+        f"https://ntfy.sh/{NTFY_TOPIC}",
+        data=body.encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    urllib.request.urlopen(req, timeout=10).close()
+
+def send_contract_alert(award, ticker, score, rating, price, cap):
+    amt     = float(award.get("amount_usd", award.get("amount", 0)))
+    agency  = award.get("agency","")[:40]
+    country = award.get("country","")
+    awarded = award.get("awarded","")
+    expires = award.get("expires","")
+    name    = award.get("recipient","")
+
+    # Clean company name
+    clean = name
+    for s in [", INC.",", LLC",", L.P."," INC"," LLC"," CORP",
+              " FEDERAL"," FEDERAL SERVICES"," GOVERNMENT SERVICES",
+              " INFORMATION TECHNOLOGY, INC."," SYSTEMS CORPORATION"]:
+        clean = clean.replace(s,"")
+    clean = clean.strip().title()
+
+    cap_str = fmt_usd(cap) if cap else "?"
+    pct_str = f" • {(amt/cap)*100:.1f}% of cap" if cap else ""
+    dur_str = ""
+    if expires:
+        yrs = get_years(awarded, expires)
+        if yrs >= 1:
+            dur_str = f" • {yrs:.0f}yr"
+
+    if   score >= 70: priority = "urgent"
+    elif score >= 40: priority = "high"
+    else:             priority = "default"
+
+    title = f"[{rating}] ${ticker} - {fmt_usd(amt)}"
+    body  = (
+        f"Company: {clean}\n"
+        f"Agency:  {agency} | {country}\n"
+        f"Score:   {score}/100{pct_str}{dur_str}\n"
+        f"Awarded: {awarded}"
+    )
+    body = body.replace("\u2014","-").replace("\u2013","-").replace("\u2019","'")
+
+    q    = urllib.parse.quote(f"{name} {agency} contract {awarded}")
+    link = (f"https://www.contractsfinder.service.gov.uk/Notice/{award.get('id','')}"
+            if country == "UK" else f"https://www.google.com/search?q={q}")
+
+    ntfy(title, body, priority, "money_bag", link)
+    log.info(f"  ALERT [{rating} {score}]: ${ticker} {fmt_usd(amt)}")
+
+def send_insider_alert(ticker, name, title, role, shares, price_paid, amount, stock_price):
+    if   "ceo" in title.lower() or "chief executive" in title.lower():
+        priority = "urgent"
+    elif "chief" in title.lower() or "president" in title.lower():
+        priority = "high"
+    else:
+        priority = "high"
+
+    vs = ""
+    if stock_price and price_paid:
+        pct = ((stock_price - price_paid) / price_paid) * 100
+        vs  = f" | now {pct:+.1f}%"
+
+    push_title = f"INSIDER BUY - ${ticker} [{role}]"
+    body = (
+        f"{name} ({title})\n"
+        f"{shares:,} shares @ ${price_paid:.2f} = {fmt_usd(amount)}{vs}"
+    )
+    link = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=4&dateb=&owner=include&count=10"
+    ntfy(push_title, body, priority, "rotating_light", link)
+    log.info(f"  INSIDER: ${ticker} {name} {fmt_usd(amount)}")
+
+# =========================================================
+# DOD — globalsecurity.org (mirrors war.gov same day)
+# =========================================================
+
+# Hardcoded known article IDs — bot updates this at runtime
+GLOBALSECURITY_KNOWN = {
+    "2026-06-01": 4505747,
+    "2026-06-02": 4506825,
+    "2026-06-03": 4507573,
+    "2026-06-04": 4508268,
+    "2026-06-05": 4508978,
+    "2026-06-06": 4509712,
+    "2026-06-09": 4510650,
+}
+
+DOD_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept":     "text/html,application/xhtml+xml",
+}
+
+def fetch_dod_page(dt):
+    used_date = dt.strftime("%Y-%m-%d")
+    ym        = dt.strftime("%Y/%m")
+
+    # Try hardcoded ID first — fast path
+    if used_date in GLOBALSECURITY_KNOWN:
+        article_id  = GLOBALSECURITY_KNOWN[used_date]
+        url = f"https://www.globalsecurity.org/military/library/news/{ym}/dod-contracts_{article_id}.htm"
+        try:
+            req = urllib.request.Request(url, headers=DOD_HEADERS)
+            with urllib.request.urlopen(req, timeout=15) as r:
+                html = r.read().decode("utf-8", errors="ignore")
+            if "was awarded" in html.lower():
+                log.info(f"DoD: fetched {used_date} (id={article_id})")
+                return html, used_date
+        except Exception as e:
+            log.debug(f"DoD known ID failed {used_date}: {e}")
+
+    # Estimate and scan — only if no known ID
+    known_dates = sorted(GLOBALSECURITY_KNOWN.keys())
+    if known_dates:
+        last_date = datetime.strptime(known_dates[-1], "%Y-%m-%d")
+        last_id   = GLOBALSECURITY_KNOWN[known_dates[-1]]
+        days_diff = (dt - last_date).days
+        estimated = int(last_id + days_diff * 800)
+    else:
+        estimated = 4510000
+
+    log.debug(f"DoD: scanning for {used_date} near ID {estimated}")
+    for delta in range(0, 3000, 100):
+        for article_id in [estimated + delta, estimated - delta]:
+            if article_id < 4000000: continue
+            url = f"https://www.globalsecurity.org/military/library/news/{ym}/dod-contracts_{article_id}.htm"
+            try:
+                req = urllib.request.Request(url, headers=DOD_HEADERS)
+                with urllib.request.urlopen(req, timeout=4) as r:
+                    html = r.read().decode("utf-8", errors="ignore")
+                if "was awarded" in html.lower() and used_date.replace("-","") in html:
+                    GLOBALSECURITY_KNOWN[used_date] = article_id
+                    log.info(f"DoD: found {used_date} at id={article_id}")
+                    return html, used_date
+            except:
+                continue
+    return None, used_date
+
+def parse_dod_html(html, used_date):
+    results = []
+    seen    = set()
+    pattern = re.compile(
+        r'([A-Z][A-Za-z0-9 &.,\-]{2,70}?),\*?\s+[A-Z][a-zA-Z .]+,\s+[A-Z]{2},?\s+'
+        r'(?:was awarded|is awarded|are awarded|is being awarded)\s+'
+        r'(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
+        re.IGNORECASE
+    )
+    for m in pattern.finditer(html):
+        company = m.group(1).strip().rstrip(",*").strip()
+        if len(company) < 3 or company[0].islower():
+            continue
+        try:
+            amount = float(m.group(2).replace(",",""))
+            if amount < 1000: amount *= 1_000_000
+        except:
+            continue
+        if amount < MIN_AWARD_USD: continue
+        uid = hashlib.sha256(f"DOD|{company}|{amount:.0f}|{used_date}".encode()).hexdigest()
+        if uid in seen: continue
+        seen.add(uid)
+        end  = min(len(html), m.end() + 300)
+        desc = re.sub(r'<[^>]+>', '', html[m.end():end]).strip()[:150]
+        results.append({
+            "uid": uid, "recipient": company, "amount": amount,
+            "amount_usd": amount, "agency": "Dept of Defense",
+            "desc": desc, "awarded": used_date, "expires": "",
+            "country": "USA", "source": "war.gov/globalsecurity.org",
+        })
+    return results
+
+def fetch_dod_awards():
+    results = []
+    today   = datetime.now()
+    for dt in [today, today - timedelta(days=1)]:
+        if dt.weekday() >= 5:  # skip weekends
+            continue
+        html, used_date = fetch_dod_page(dt)
+        if html:
+            parsed = parse_dod_html(html, used_date)
+            log.info(f"DoD: {len(parsed)} contracts for {used_date}")
+            results.extend(parsed)
+        else:
+            log.info(f"DoD: no page yet for {used_date}")
+    return results
+
+# =========================================================
+# UK — Contracts Finder (real-time API)
+# =========================================================
+
+def fetch_uk_awards():
+    try:
+        since = (datetime.now() - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%S")
+        now   = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        url   = (f"https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search"
+                 f"?publishedFrom={since}&publishedTo={now}&stages=award&limit=100")
+        req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0","Accept":"application/json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read())
+        results = []
+        for release in data.get("releases", []):
+            for award in release.get("awards", []):
+                amt_gbp = float((award.get("value") or {}).get("amount", 0) or 0)
+                amt_usd = amt_gbp * 1.27  # approximate GBP->USD
+                if amt_usd < MIN_AWARD_USD: continue
+                suppliers = award.get("suppliers", [{}])
+                name = suppliers[0].get("name","Unknown") if suppliers else "Unknown"
+                uid  = hashlib.sha256(f"UK|{name}|{amt_gbp:.0f}".encode()).hexdigest()
+                results.append({
+                    "uid": uid, "recipient": name,
+                    "amount": amt_gbp, "amount_usd": amt_usd,
+                    "agency": release.get("buyer",{}).get("name",""),
+                    "desc": (release.get("tender",{}).get("description") or "")[:150],
+                    "awarded": (award.get("date") or "")[:10],
+                    "expires": ((award.get("contractPeriod") or {}).get("endDate") or "")[:10],
+                    "country": "UK",
+                    "id": release.get("ocid",""),
+                    "source": "Contracts Finder (UK)",
+                })
+        log.info(f"UK: {len(results)} contracts")
+        return results
+    except Exception as e:
+        log.warning(f"UK fetch failed: {e}")
+        return []
+
+# =========================================================
+# SEC INSIDER — Form 4 XML parser
 # =========================================================
 
 SEC_HEADERS = {
@@ -468,7 +511,7 @@ SEC_HEADERS = {
 
 _insider_cache = {}
 
-def fetch_recent_form4s(ticker):
+def fetch_form4s(ticker):
     try:
         since = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
         today = datetime.now().strftime("%Y-%m-%d")
@@ -477,594 +520,125 @@ def fetch_recent_form4s(ticker):
         req = urllib.request.Request(url, headers=SEC_HEADERS)
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
-        filings = []
+        out = []
         for hit in data.get("hits",{}).get("hits",[]):
             src = hit.get("_source",{})
-            filings.append({
+            out.append({
                 "accession": hit.get("_id",""),
                 "filed":     src.get("file_date",""),
                 "filer":     src.get("display_names",["Unknown"])[0],
                 "cik":       src.get("entity_id",""),
             })
-        return filings
+        return out
     except Exception as e:
-        log.debug(f"Form4 search failed for {ticker}: {e}")
+        log.debug(f"Form4 search failed {ticker}: {e}")
         return []
 
-def get_form4_xml_url(accession_raw, cik):
+def get_xml_url(accession, cik):
     try:
-        acc_nodashes = accession_raw.replace("-","").replace(":","")
-        if len(acc_nodashes) == 18:
-            acc_dashes = f"{acc_nodashes[:10]}-{acc_nodashes[10:12]}-{acc_nodashes[12:]}"
+        acc = accession.replace("-","").replace(":","")
+        if len(acc) == 18:
+            dashed = f"{acc[:10]}-{acc[10:12]}-{acc[12:]}"
         else:
-            acc_dashes = re.sub(r'(\d{10})(\d{2})(\d{6})', r'\1-\2-\3', acc_nodashes)
-        idx_url = (f"https://www.sec.gov/Archives/edgar/data"
-                   f"/{cik}/{acc_nodashes}/{acc_dashes}-index.htm")
+            dashed = re.sub(r'(\d{10})(\d{2})(\d{6})', r'\1-\2-\3', acc)
+        idx_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{dashed}-index.htm"
         req = urllib.request.Request(idx_url, headers=SEC_HEADERS)
         with urllib.request.urlopen(req, timeout=10) as r:
-            idx_html = r.read().decode("utf-8", errors="ignore")
-        xml_links = re.findall(r'href="([^"]*\.xml)"', idx_html, re.IGNORECASE)
-        for link in xml_links:
-            lower = link.lower()
-            if "xsl" in lower or "stylesheet" in lower:
+            html = r.read().decode("utf-8", errors="ignore")
+        for link in re.findall(r'href="([^"]*\.xml)"', html, re.IGNORECASE):
+            if "xsl" in link.lower() or "stylesheet" in link.lower():
                 continue
-            if link.startswith("http"):  return link
-            elif link.startswith("/"):   return f"https://www.sec.gov{link}"
-            else: return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodashes}/{link}"
-        return None
-    except Exception as e:
-        log.debug(f"XML URL lookup failed for {accession_raw}: {e}")
-        return None
-
-def parse_form4_xml(xml_url, ticker, filer_name, filed_date):
-    try:
-        req = urllib.request.Request(xml_url, headers=SEC_HEADERS)
-        with urllib.request.urlopen(req, timeout=10) as r:
-            xml = r.read().decode("utf-8", errors="ignore")
-        signals       = []
-        officer_title = ""
-        is_director   = False
-        is_officer    = False
-        title_match = re.search(r'<officerTitle>(.*?)</officerTitle>', xml, re.IGNORECASE)
-        if title_match: officer_title = title_match.group(1).strip()
-        dir_match = re.search(r'<isDirector>(.*?)</isDirector>', xml, re.IGNORECASE)
-        if dir_match: is_director = dir_match.group(1).strip() in ("1","true","True")
-        off_match = re.search(r'<isOfficer>(.*?)</isOfficer>', xml, re.IGNORECASE)
-        if off_match: is_officer = off_match.group(1).strip() in ("1","true","True")
-        if not is_director and not is_officer:
-            return []
-        title_lower = officer_title.lower()
-        is_csuite = any(t in title_lower for t in [
-            "chief executive","ceo","chief financial","cfo",
-            "chief operating","coo","president","chairman",
-            "chief technology","cto","executive vice",
-        ])
-        role = "C-Suite" if is_csuite else "Director"
-        nd_blocks = re.findall(
-            r'<nonDerivativeTransaction>(.*?)</nonDerivativeTransaction>',
-            xml, re.DOTALL | re.IGNORECASE
-        )
-        for block in nd_blocks:
-            code_match = re.search(r'<transactionCode>(.*?)</transactionCode>', block, re.IGNORECASE)
-            if not code_match or code_match.group(1).strip() != "P":
-                continue
-            ownership_match = re.search(r'<directOrIndirectOwnership>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
-            if ownership_match and ownership_match.group(1).strip() == "I":
-                continue
-            shares_match = re.search(r'<transactionShares>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
-            shares = 0
-            if shares_match:
-                try: shares = float(shares_match.group(1).strip().replace(",",""))
-                except: pass
-            price_match = re.search(r'<transactionPricePerShare>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
-            price_per_share = 0
-            if price_match:
-                try: price_per_share = float(price_match.group(1).strip().replace(",",""))
-                except: pass
-            total_value = shares * price_per_share
-            if total_value < MIN_INSIDER_BUY_USD:
-                continue
-            sec_match = re.search(r'<securityTitle>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
-            security = sec_match.group(1).strip() if sec_match else "Common Stock"
-            signals.append({
-                "ticker":   ticker,
-                "insider":  filer_name,
-                "title":    officer_title or role,
-                "role":     role,
-                "shares":   int(shares),
-                "price":    price_per_share,
-                "amount":   total_value,
-                "security": security,
-                "filed":    filed_date,
-                "uid":      f"INSIDER:{ticker}:{filer_name}:{filed_date}:{total_value:.0f}",
-            })
-        return signals
-    except Exception as e:
-        log.debug(f"Form4 XML parse failed for {xml_url}: {e}")
-        return []
-
-def get_insider_buys(ticker):
-    try:
-        for cache_key, signals in _insider_cache.items():
-            if cache_key.startswith(f"{ticker}:") and signals:
-                s = signals[0]
-                return (f"{s['insider']} ({s['title']}) bought "
-                        f"{s['shares']:,} shares @ ${s['price']:.2f} "
-                        f"= {fmt_usd(s['amount'])} on {s['filed']}")
+            if link.startswith("http"): return link
+            if link.startswith("/"): return f"https://www.sec.gov{link}"
+            return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{link}"
         return None
     except:
         return None
 
-def check_insider_buys():
-    log.info("Checking insider activity across watchlist...")
-    alerts_sent = 0
-    for ticker in INSIDER_WATCHLIST:
-        try:
-            filings = fetch_recent_form4s(ticker)
-            if not filings:
-                time.sleep(0.5)
-                continue
-            for filing in filings[:3]:
-                acc       = filing["accession"]
-                filed     = filing["filed"]
-                filer     = filing["filer"]
-                cik       = filing["cik"]
-                cache_key = f"{ticker}:{acc}"
-                if cache_key in _insider_cache:
-                    signals = _insider_cache[cache_key]
-                else:
-                    xml_url = get_form4_xml_url(acc, cik)
-                    if not xml_url:
-                        _insider_cache[cache_key] = []
-                        time.sleep(0.5)
-                        continue
-                    signals = parse_form4_xml(xml_url, ticker, filer, filed)
-                    _insider_cache[cache_key] = signals
-                    time.sleep(0.5)
-                for signal in signals:
-                    uid = signal["uid"]
-                    if already_seen_insider(uid):
-                        continue
-                    log.info(f"INSIDER BUY ★ ${ticker} | {signal['insider']} ({signal['title']}) | "
-                             f"{fmt_usd(signal['amount'])} | {signal['shares']:,} shares @ ${signal['price']:.2f}")
-                    stock_price, cap, currency, exchange = get_stock_info(ticker)
-                    try:
-                        send_insider_push(
-                            ticker, signal["insider"], signal["title"],
-                            signal["role"], signal["shares"], signal["price"],
-                            signal["amount"], signal["security"], filed,
-                            stock_price, cap, exchange
-                        )
-                        alerts_sent += 1
-                    except Exception as e:
-                        log.error(f"Insider push failed for {ticker}: {e}")
-                    mark_seen_insider(uid, ticker, signal["insider"], signal["title"], signal["amount"])
-        except Exception as e:
-            log.debug(f"Insider check failed for {ticker}: {e}")
-        time.sleep(0.5)
-    log.info(f"Insider check done — {alerts_sent} alerts sent")
-
-# =========================================================
-# FETCH DoD — globalsecurity.org mirrors war.gov daily
-# Posted same day, usually 1-2 hours after 5pm Eastern
-# No IP blocking unlike war.gov direct
-# =========================================================
-
-def fetch_dod_awards():
+def parse_form4(xml_url, ticker, filer, filed):
     try:
-        today   = datetime.now()
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept":     "text/html,application/xhtml+xml",
-        }
-        results   = []
-        seen_uids = set()
+        req = urllib.request.Request(xml_url, headers=SEC_HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            xml = r.read().decode("utf-8", errors="ignore")
 
-        for dt in [today, today - timedelta(days=1)]:
-            year      = dt.strftime("%Y")
-            month     = dt.strftime("%m")
-            day       = dt.strftime("%d")
-            used_date = dt.strftime("%Y-%m-%d")
+        def tag(name):
+            m = re.search(rf'<{name}>(.*?)</{name}>', xml, re.IGNORECASE)
+            return m.group(1).strip() if m else ""
 
-            # Fetch daily index page
-            daily_url = f"https://www.globalsecurity.org/military/library/news/{year}/{month}/{month}-{day}_index.htm"
-            try:
-                req = urllib.request.Request(daily_url, headers=headers)
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    daily_html = r.read().decode("utf-8", errors="ignore")
-            except Exception as e:
-                log.debug(f"DoD: daily index not found for {used_date}: {e}")
-                continue
-
-            # Find dod-contracts link
-            contract_links = re.findall(
-                r'href="(/military/library/news/\d{4}/\d{2}/dod-contracts_[^"]+\.htm)"',
-                daily_html
-            )
-            if not contract_links:
-                log.debug(f"DoD: no contract link on {used_date} page yet")
-                continue
-
-            # Fetch contract page
-            article_url = f"https://www.globalsecurity.org{contract_links[0]}"
-            try:
-                req2 = urllib.request.Request(article_url, headers=headers)
-                with urllib.request.urlopen(req2, timeout=20) as r2:
-                    article = r2.read().decode("utf-8", errors="ignore")
-            except Exception as e:
-                log.debug(f"DoD: could not fetch contract page: {e}")
-                continue
-
-            log.info(f"DoD: parsing contracts for {used_date}")
-
-            # Parse awards: Company, City, State, was awarded a $X
-            award_pattern = re.compile(
-                r'([A-Z][A-Za-z0-9 &.,\-]{2,70}?),\*?\s+[A-Z][a-zA-Z .]+,\s+[A-Z]{2},?\s+(?:was awarded|is awarded|are awarded|is being awarded)\s+(?:a\s+)?(?:not-to-exceed\s+)?\$([0-9,]+(?:\.[0-9]+)?)',
-                re.IGNORECASE
-            )
-            for match in award_pattern.finditer(article):
-                company = match.group(1).strip().rstrip(",*").strip()
-                if len(company) < 3 or company[0].islower():
-                    continue
-                amt_str = match.group(2).replace(",", "")
-                try:
-                    amount = float(amt_str)
-                    if amount < 1_000:
-                        amount *= 1_000_000
-                except:
-                    continue
-                if amount < MIN_AWARD_USD:
-                    continue
-                uid = f"DOD:{used_date}:{company[:30]}:{amount:.0f}"
-                if uid in seen_uids:
-                    continue
-                seen_uids.add(uid)
-                end  = min(len(article), match.end() + 400)
-                desc = re.sub(r'<[^>]+>', '', article[match.end():end]).strip()[:200]
-                results.append({
-                    "id":         uid,
-                    "recipient":  company,
-                    "amount":     amount,
-                    "amount_usd": amount,
-                    "currency":   "USD",
-                    "agency":     "Department of Defense",
-                    "desc":       desc,
-                    "awarded":    used_date,
-                    "expires":    "",
-                    "location":   "USA",
-                    "country":    "USA",
-                    "source":     "war.gov via globalsecurity.org",
-                })
-
-        log.info(f"DoD: {len(results)} contracts parsed")
-        return results
-
-    except Exception as e:
-        log.warning(f"DoD fetch failed: {e}")
-        return []
-
-# =========================================================
-# FETCH USA — USASpending.gov (48hr window catches DoD batch)
-# =========================================================
-
-def fetch_us_awards():
-    today = datetime.now().strftime("%Y-%m-%d")
-    payload = json.dumps({
-        "filters": {
-            "award_type_codes": ["A","B","C","D"],
-            "time_period": [{"start_date": today,
-                             "end_date":   today}],
-            "award_amounts": [{"lower_bound": MIN_AWARD_USD}],
-        },
-        "fields": ["Award ID","Recipient Name","Award Amount","Awarding Agency",
-                   "Description","Start Date","End Date",
-                   "Place of Performance City Name","Place of Performance State Code"],
-        "sort": "Award Amount", "order": "desc", "limit": 100, "page": 1,
-    }).encode()
-    try:
-        req = urllib.request.Request(
-            "https://api.usaspending.gov/api/v2/search/spending_by_award/",
-            data=payload,
-            headers={"Content-Type":"application/json","User-Agent":"ContractBot/1.0"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read())
-        results = []
-        for a in data.get("results", []):
-            results.append({
-                "id": a.get("Award ID",""), "recipient": a.get("Recipient Name",""),
-                "amount": float(a.get("Award Amount") or 0),
-                "amount_usd": float(a.get("Award Amount") or 0),
-                "currency": "USD", "agency": a.get("Awarding Agency",""),
-                "desc": (a.get("Description") or "")[:200],
-                "awarded": a.get("Start Date",""),
-                "expires": a.get("End Date",""),
-                "location": ", ".join(filter(None,[
-                    a.get("Place of Performance City Name",""),
-                    a.get("Place of Performance State Code","")])),
-                "country": "USA", "source": "USASpending.gov",
-            })
-        return results
-    except Exception as e:
-        log.warning(f"USASpending fetch failed: {e}")
-        return []
-
-# =========================================================
-# FETCH UK
-# =========================================================
-
-def fetch_uk_awards():
-    try:
-        since = datetime.now().strftime("%Y-%m-%dT00:00:00")
-        now   = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-        url   = (f"https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search"
-                 f"?publishedFrom={since}&publishedTo={now}&stages=award&limit=100")
-        req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0","Accept":"application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read())
-        fx = get_fx_rate("GBP")
-        results = []
-        for release in data.get("releases", []):
-            for award in release.get("awards", []):
-                amount_gbp = float((award.get("value") or {}).get("amount",0) or 0)
-                if amount_gbp * fx < MIN_AWARD_USD: continue
-                suppliers = award.get("suppliers",[{}])
-                name = suppliers[0].get("name","Unknown") if suppliers else "Unknown"
-                results.append({
-                    "id": release.get("ocid",""), "recipient": name,
-                    "amount": amount_gbp, "amount_usd": amount_gbp * fx,
-                    "currency": "GBP", "agency": release.get("buyer",{}).get("name",""),
-                    "desc": (release.get("tender",{}).get("description") or "")[:200],
-                    "awarded": (award.get("date") or "")[:10],
-                    "expires": ((award.get("contractPeriod") or {}).get("endDate") or "")[:10],
-                    "location": "United Kingdom", "country": "UK",
-                    "source": "Contracts Finder (UK)",
-                })
-        return results
-    except Exception as e:
-        log.warning(f"UK fetch failed: {e}")
-        return []
-
-# =========================================================
-# FETCH CANADA — dynamic fiscal year URL
-# =========================================================
-
-def fetch_canada_awards():
-    try:
-        fx      = get_fx_rate("CAD")
-        min_cad = MIN_AWARD_USD / fx
-        since   = datetime.now().strftime("%Y-%m-%d")
-
-        # Try current and previous fiscal year dynamically
-        year = datetime.now().year
-        content = None
-        for y in [year, year - 1]:
-            url = f"https://canadabuys.canada.ca/opendata/pub/{y}-{y+1}-awardNotice-avisAttribution.csv"
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0"})
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    content = r.read().decode("utf-8-sig")
-                break
-            except:
-                continue
-
-        if not content:
-            log.warning("Canada: could not fetch award CSV")
+        is_dir = tag("isDirector") in ("1","true","True")
+        is_off = tag("isOfficer")  in ("1","true","True")
+        if not is_dir and not is_off:
             return []
 
-        results = []
-        reader = csv.DictReader(io.StringIO(content))
-        for row in reader:
-            val_str = ""
-            for f in ["contractValue-valeurContrat","totalValue-valeurTotale","contract_value"]:
-                if row.get(f): val_str = row[f]; break
-            try: amount_cad = float(str(val_str).replace(",","").replace("$","").strip() or 0)
-            except: amount_cad = 0
-            if amount_cad < min_cad: continue
-            awarded = ""
-            for f in ["publicationDate-datePublication","contractDate-dateContrat","contract_date"]:
-                if row.get(f): awarded = str(row[f])[:10]; break
-            if awarded and awarded < since: continue
-            vendor = ""
-            for f in ["vendorName-nomFournisseur","vendor_name","supplierName-nomFournisseur"]:
-                if row.get(f): vendor = row[f]; break
-            if not vendor: continue
-            desc = ""
-            for f in ["description-descriptionDuContrat","description","title-titre"]:
-                if row.get(f): desc = str(row[f])[:200]; break
-            ref = ""
-            for f in ["referenceNumber-numeroReference","reference_number"]:
-                if row.get(f): ref = row[f]; break
-            if not ref: ref = hashlib.sha256(f"{vendor}|{awarded}".encode()).hexdigest()[:16]
-            results.append({
-                "id": ref, "recipient": vendor,
-                "amount": amount_cad, "amount_usd": amount_cad * fx,
-                "currency": "CAD", "agency": row.get("ownerAcronym-acronymeProprietaire",""),
-                "desc": desc, "awarded": awarded, "expires": "",
-                "location": "Canada", "country": "Canada",
-                "source": "CanadaBuys.canada.ca",
+        officer_title = tag("officerTitle")
+        tl = officer_title.lower()
+        if any(t in tl for t in ["chief executive","ceo"]): role = "CEO"
+        elif any(t in tl for t in ["chief","president","cfo","coo"]): role = "C-Suite"
+        else: role = "Director"
+
+        signals = []
+        for block in re.findall(r'<nonDerivativeTransaction>(.*?)</nonDerivativeTransaction>',
+                                xml, re.DOTALL | re.IGNORECASE):
+            code = re.search(r'<transactionCode>(.*?)</transactionCode>', block, re.IGNORECASE)
+            if not code or code.group(1).strip() != "P": continue
+
+            own = re.search(r'<directOrIndirectOwnership>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
+            if own and own.group(1).strip() == "I": continue
+
+            def val(tag_name):
+                m = re.search(rf'<{tag_name}>.*?<value>(.*?)</value>', block, re.DOTALL | re.IGNORECASE)
+                if m:
+                    try: return float(m.group(1).strip().replace(",",""))
+                    except: pass
+                return 0.0
+
+            shares    = val("transactionShares")
+            price_per = val("transactionPricePerShare")
+            total     = shares * price_per
+            if total < MIN_INSIDER_BUY_USD: continue
+
+            uid = f"INSIDER:{ticker}:{filer}:{filed}:{total:.0f}"
+            signals.append({
+                "ticker": ticker, "filer": filer,
+                "title":  officer_title or role, "role": role,
+                "shares": int(shares), "price": price_per,
+                "amount": total, "filed": filed, "uid": uid,
             })
-        return results
+        return signals
     except Exception as e:
-        log.warning(f"Canada fetch failed: {e}")
+        log.debug(f"Form4 parse failed {xml_url}: {e}")
         return []
 
-# =========================================================
-# FETCH ISRAEL
-# =========================================================
+def check_insiders():
+    log.info("Checking insider buys...")
+    sent = 0
+    for ticker in INSIDER_WATCHLIST:
+        try:
+            for filing in fetch_form4s(ticker)[:3]:
+                key = f"{ticker}:{filing['accession']}"
+                if key in _insider_cache:
+                    signals = _insider_cache[key]
+                else:
+                    xml_url = get_xml_url(filing["accession"], filing["cik"])
+                    signals = parse_form4(xml_url, ticker, filing["filer"], filing["filed"]) if xml_url else []
+                    _insider_cache[key] = signals
+                    time.sleep(0.3)
 
-def fetch_israel_awards():
-    try:
-        fx      = get_fx_rate("ILS")
-        min_ils = MIN_AWARD_USD / fx
-        since   = datetime.now().strftime("%Y-%m-%d")
-        url = (f"https://next.obudget.org/api/query?"
-               f"query=SELECT%20*%20FROM%20procurement_winner_detail"
-               f"%20WHERE%20start_date%3E%3D%27{since}%27"
-               f"%20ORDER%20BY%20volume%20DESC%20LIMIT%20100&num_rows=100")
-        req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0","Accept":"application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read())
-        results = []
-        for a in data.get("rows", []):
-            try: amount_ils = float(a.get("volume") or 0)
-            except: amount_ils = 0
-            if amount_ils < min_ils: continue
-            results.append({
-                "id": str(a.get("order_id","")), "recipient": a.get("supplier_name","Unknown"),
-                "amount": amount_ils, "amount_usd": amount_ils * fx,
-                "currency": "ILS", "agency": a.get("purchasing_unit_name",""),
-                "desc": (a.get("description") or "")[:200],
-                "awarded": str(a.get("start_date",""))[:10],
-                "expires": str(a.get("end_date",""))[:10],
-                "location": "Israel", "country": "Israel",
-                "source": "OpenBudget.org.il",
-            })
-        return results
-    except Exception as e:
-        log.warning(f"Israel fetch failed: {e}")
-        return []
-
-# =========================================================
-# PUSH — CONTRACT ALERT
-# =========================================================
-
-def send_push(award, ticker, exchange, stock_currency, stock_price,
-              cap_raw, amount_usd, insider, deal_score, rating, reasons):
-    recipient  = award.get("recipient","Unknown")
-    currency   = award.get("currency","USD")
-    agency     = award.get("agency","")
-    country    = award.get("country","")
-    source     = award.get("source","")
-    award_id   = award.get("id","")
-    awarded    = award.get("awarded","")
-    expires    = award.get("expires","")
-    desc       = award.get("desc","")[:100]
-    amt_val    = float(amount_usd or 0)
-    alerted_at = datetime.now().strftime("%b %d %Y at %I:%M %p")
-
-    if deal_score >= 70:   priority = "urgent"
-    elif deal_score >= 40: priority = "high"
-    else:                  priority = "default"
-
-    # Clean company name — strip federal/government suffixes
-    name = recipient
-    for suffix in [", INC.", ", LLC", ", L.P.", " INC", " LLC", " CORP",
-                   " FEDERAL", " FEDERAL SERVICES", " GOVERNMENT SERVICES",
-                   " SYSTEMS CORPORATION", " INFORMATION TECHNOLOGY, INC."]:
-        name = name.replace(suffix, "")
-    name = name.strip().title()
-
-    # Card title — rating first, then ticker and amount
-    title = f"[{rating}] ${ticker} - {fmt_usd(amount_usd)}"
-    title = title.encode("ascii", errors="ignore").decode("ascii")
-
-    # Impact line
-    cap_str = fmt_usd(cap_raw) if cap_raw and cap_raw > 0 else None
-    pct_str = f"{(amt_val/cap_raw)*100:.1f}% of mkt cap" if cap_raw and cap_raw > 0 else None
-
-    # Duration
-    years = get_contract_years(awarded, expires)
-    dur_str = f"{years:.0f}yr contract" if expires and years >= 1 else ""
-
-    # Build clean 3-line body
-    line1 = f"📋 {agency} • {country}"
-    line2_parts = [f"🎯 Score: {deal_score}/100 {rating}"]
-    if pct_str: line2_parts.append(pct_str)
-    if dur_str: line2_parts.append(dur_str)
-    line2 = " • ".join(line2_parts)
-
-    # Optional line 3 — insider activity
-    line3 = f"🔔 + INSIDER BUY active" if insider else ""
-
-    body = line1 + "\n" + line2
-    if line3: body += "\n" + line3
-    # Sanitize special unicode chars that break latin-1 encoding
-    body = body.replace("\u2014", "-").replace("\u2013", "-").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
-
-    # Build click link — Google search is most reliable across all sources
-    q = urllib.parse.quote(f"{recipient} {agency} contract {awarded}")
-    if country == "UK" and award_id:
-        link = f"https://www.contractsfinder.service.gov.uk/Notice/{award_id}"
-    else:
-        link = f"https://www.google.com/search?q={q}"
-
-    req = urllib.request.Request(
-        f"https://ntfy.sh/{NTFY_TOPIC}",
-        data=body.encode("utf-8"),
-        headers={"Title":title.encode("utf-8").decode("utf-8"),"Priority":priority,
-                 "Tags":"money_bag","Click":link,"Content-Type":"text/plain; charset=utf-8"},
-        method="POST",
-    )
-    retry(lambda: urllib.request.urlopen(req, timeout=10).close())
-    log.info(f"  Pushed [{rating} {deal_score}/100]: {title}")
-
-# =========================================================
-# PUSH — INSIDER BUY ALERT
-# =========================================================
-
-def send_insider_push(ticker, insider, title, role, shares, price_paid,
-                      amount, security, filed, stock_price, cap, exchange):
-    title_lower = (title or "").lower()
-    if any(t in title_lower for t in ["chief executive","ceo"]):
-        priority = "urgent"
-    elif any(t in title_lower for t in ["chief","president"]):
-        priority = "high"
-    else:
-        priority = "default"
-
-    # Clean insider name to First Last format
-    name_parts = insider.split()
-    clean_name = " ".join(name_parts[:2]) if len(name_parts) >= 2 else insider
-
-    # Card title
-    push_title = f"INSIDER BUY - ${ticker} [{role}]"
-    push_title = push_title.encode("ascii", errors="ignore").decode("ascii")
-
-    # 3-line body
-    line1 = f"{clean_name} ({title or role})"
-    line2 = f"{shares:,} shares @ ${price_paid:.2f} = {fmt_usd(amount)}"
-    line3_parts = []
-    if stock_price: line3_parts.append(f"Stock now ${stock_price:.2f}")
-    if stock_price and price_paid and price_paid > 0:
-        change = ((stock_price - price_paid) / price_paid) * 100
-        line3_parts.append(f"{change:+.1f}% since buy")
-    line3 = " • ".join(line3_parts) if line3_parts else f"Filed {filed}"
-
-    body = line1 + "\n" + line2 + "\n" + line3
-
-    req = urllib.request.Request(
-        f"https://ntfy.sh/{NTFY_TOPIC}",
-        data=body.encode("utf-8"),
-        headers={
-            "Title":    push_title,
-            "Priority": priority,
-            "Tags":     "rotating_light",
-            "Click":    f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=4&dateb=&owner=include&count=10",
-            "Content-Type": "text/plain; charset=utf-8",
-        },
-        method="POST",
-    )
-    retry(lambda: urllib.request.urlopen(req, timeout=10).close())
-    log.info(f"  Insider push: ${ticker} — {clean_name} ({title}) — {fmt_usd(amount)}")
-
-# =========================================================
-# TEST PUSH
-# =========================================================
-
-def send_test_push():
-    try:
-        req = urllib.request.Request(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data="Monitoring USASpending | UK | Canada | Israel | SEC insider buys".encode("utf-8"),
-            headers={"Title":"Contract Bot Live","Priority":"default","Tags":"white_check_mark"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=10).close()
-        log.info("Test push sent")
-    except Exception as e:
-        log.warning(f"Test push failed: {e}")
+                for s in signals:
+                    if already_seen_insider(s["uid"]): continue
+                    price, _ = get_stock_info(ticker)
+                    log.info(f"INSIDER ★ ${ticker} {s['filer']} ({s['role']}) {fmt_usd(s['amount'])}")
+                    try:
+                        send_insider_alert(ticker, s["filer"], s["title"], s["role"],
+                                           s["shares"], s["price"], s["amount"], price)
+                        sent += 1
+                    except Exception as e:
+                        log.error(f"Insider push failed: {e}")
+                    mark_seen_insider(s["uid"], ticker, s["filer"], s["title"], s["amount"])
+        except Exception as e:
+            log.debug(f"Insider check failed {ticker}: {e}")
+        time.sleep(0.3)
+    log.info(f"Insider check done — {sent} sent")
 
 # =========================================================
 # MAIN CHECK
@@ -1072,112 +646,74 @@ def send_test_push():
 
 def check():
     log.info("─" * 55)
-    log.info(f"Checking all markets — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log.info(f"Check — {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}")
+
     all_awards = []
-    for name, fn in [
-        ("DoD",    fetch_dod_awards),
-        ("USA",    fetch_us_awards),
-        ("UK",     fetch_uk_awards),
-        ("Canada", fetch_canada_awards),
-        ("Israel", fetch_israel_awards),
-    ]:
+    for label, fn in [("DoD", fetch_dod_awards), ("UK", fetch_uk_awards)]:
         try:
             awards = fn()
-            log.info(f"{name}: {len(awards)} contracts fetched")
             all_awards.extend(awards)
         except Exception as e:
-            log.error(f"{name} fetch failed: {e}")
+            log.error(f"{label} failed: {e}")
 
     log.info(f"Total fetched: {len(all_awards)}")
-    new_count = 0
+    new = 0
 
     for award in all_awards:
-        uid = hashlib.sha256(
-            f"{award['country']}|{award.get('recipient','')}|{award.get('agency','')}|{award.get('amount',0)}|{award.get('awarded','')}".encode()
+        uid = award.get("uid") or hashlib.sha256(
+            f"{award['country']}|{award['recipient']}|{award['amount']}|{award['awarded']}".encode()
         ).hexdigest()
+
         if already_seen(uid): continue
 
-        ticker, exchange, currency = find_company(award["recipient"])
-
-        # Skip private companies
-        if ticker == "PRIVATE":
-            log.info(f"  Skipping private company: {award['recipient']}")
-            mark_seen(uid, award, award.get("amount_usd",0), award["country"], "", "", 0)
-            continue
-
+        ticker = find_ticker(award["recipient"])
         if not ticker:
-            mark_seen(uid, award, award.get("amount_usd",0), award["country"], "", "", 0)
+            mark_seen(uid, award["recipient"], award["amount_usd"],
+                      award.get("agency",""), award["country"], "", 0)
             continue
 
-        amount_usd   = award.get("amount_usd", award["amount"])
-        stock_price, cap_raw, stock_currency, _ = get_stock_info(ticker)
-        insider_note = get_insider_buys(ticker)
-        years        = get_contract_years(award.get("awarded",""), award.get("expires",""))
-        deal_score, rating, reasons = score_deal(amount_usd, cap_raw, years, insider_note, ticker)
+        price, cap = get_stock_info(ticker)
+        years = get_years(award.get("awarded",""), award.get("expires",""))
+        score, rating = score_deal(award["amount_usd"], cap, years, False)
 
-        # Synergy bonus — contract + insider buy, scaled by role
-        if insider_note and deal_score >= 15:
-            insider_lower = insider_note.lower()
-            if any(t in insider_lower for t in ["chief executive","ceo"]):
-                bonus = 10
-            elif any(t in insider_lower for t in ["chief","president","cfo","coo"]):
-                bonus = 8
-            else:
-                bonus = 5
-            deal_score = min(100, deal_score + bonus)
-            reasons.append(f"CONTRACT + INSIDER BUY alignment (+{bonus}pts)")
-            if deal_score >= 70:   rating = "STRONG BUY"
-            elif deal_score >= 50: rating = "HIGH VALUE"
-            elif deal_score >= 30: rating = "NOTABLE"
+        log.info(f"NEW [{award['country']}] {award['recipient']} | {fmt_usd(award['amount_usd'])} | ${ticker} | {score}/100 {rating}")
 
-        log.info(f"NEW ★ [{award['country']}] {award['recipient']} | "
-                 f"{fmt_usd(amount_usd)} | ${ticker} | Score: {deal_score}/100 [{rating}]")
+        if score >= MIN_DEAL_SCORE:
+            try:
+                send_contract_alert(award, ticker, score, rating, price, cap)
+                new += 1
+            except Exception as e:
+                log.error(f"Push failed: {e}")
 
-        if deal_score < MIN_DEAL_SCORE:
-            log.info(f"  Skipped — score {deal_score} below minimum {MIN_DEAL_SCORE}")
-            mark_seen(uid, award, amount_usd, award["country"], ticker, exchange, deal_score)
-            continue
+        mark_seen(uid, award["recipient"], award["amount_usd"],
+                  award.get("agency",""), award["country"], ticker, score)
 
-        try:
-            send_push(award, ticker, exchange, stock_currency, stock_price,
-                      cap_raw, amount_usd, insider_note, deal_score, rating, reasons)
-        except Exception as e:
-            log.error(f"Push failed: {e}")
-
-        mark_seen(uid, award, amount_usd, award["country"], ticker, exchange, deal_score)
-        new_count += 1
-
-    log.info(f"Done — {new_count} new contract alerts sent")
-
-    try:
-        check_insider_buys()
-    except Exception as e:
-        import traceback
-        log.error(f"Insider check failed: {e}")
-        log.error(traceback.format_exc())
+    log.info(f"Done — {new} contract alerts sent")
+    check_insiders()
 
 # =========================================================
 # MAIN LOOP
 # =========================================================
 
 def run_bot():
-    send_test_push()
+    # Startup notification
+    try:
+        ntfy("Contract Bot Live", "Monitoring DoD + UK + SEC insider buys", tags="white_check_mark")
+    except: pass
+
     last_cleanup = datetime.now()
     while True:
         try:
             check()
         except Exception as e:
             import traceback
-            log.error(f"Check error: {e}")
-            log.error(traceback.format_exc())
-        # Weekly DB cleanup
+            log.error(f"Check error: {e}\n{traceback.format_exc()}")
+
         if (datetime.now() - last_cleanup).days >= 7:
-            try:
-                cleanup_db()
-                last_cleanup = datetime.now()
-            except Exception as e:
-                log.warning(f"DB cleanup failed: {e}")
-        log.info(f"Sleeping {CHECK_MINUTES} minutes until next check...")
+            cleanup_old()
+            last_cleanup = datetime.now()
+
+        log.info(f"Sleeping {CHECK_MINUTES}min...")
         time.sleep(CHECK_MINUTES * 60)
 
 # =========================================================
@@ -1185,18 +721,11 @@ def run_bot():
 # =========================================================
 
 print("=" * 55)
-print("  GLOBAL CONTRACT ALERT BOT")
-print("=" * 55)
-print(f"  Sources    : DoD(globalsecurity) + USASpending + UK + Canada + Israel")
-print(f"  Insider    : {len(INSIDER_WATCHLIST)} tickers monitored")
-print(f"  Min award  : {fmt_usd(MIN_AWARD_USD)}")
-print(f"  Min insider: {fmt_usd(MIN_INSIDER_BUY_USD)}")
-print(f"  Min score  : {MIN_DEAL_SCORE}/100")
-print(f"  Interval   : every {CHECK_MINUTES} minutes")
-print(f"  ntfy       : ntfy.sh/{NTFY_TOPIC}")
+print("  CONTRACT ALERT BOT")
+print(f"  DoD (globalsecurity) + UK Contracts Finder")
+print(f"  {len(INSIDER_WATCHLIST)} insider tickers | {len(KNOWN)} known companies")
+print(f"  Min award: $5M | Min score: {MIN_DEAL_SCORE} | Every {CHECK_MINUTES}min")
 print("=" * 55)
 
-bot_thread = threading.Thread(target=run_bot, daemon=True)
-bot_thread.start()
-
+threading.Thread(target=run_bot, daemon=True).start()
 start_web_server()
