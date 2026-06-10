@@ -17,10 +17,10 @@ from datetime import datetime, timedelta
 # =========================================================
 
 NTFY_TOPIC          = "my-contract-alerts"
-MIN_AWARD_USD       = 5_000_000
+MIN_AWARD_USD       = 25_000_000  # pre-filter noise, % of cap does the real work
 CHECK_MINUTES       = 15
 DATABASE            = "contracts.db"
-MIN_DEAL_SCORE      = 10
+MIN_DEAL_SCORE      = 25
 MIN_INSIDER_BUY_USD = 250_000
 
 # =========================================================
@@ -321,24 +321,26 @@ def get_stock_info(ticker):
 
 def score_deal(amount_usd, market_cap, years):
     score = 0
+    has_cap = market_cap and market_cap > 0
 
-    if not market_cap or market_cap <= 0:
-        pass  # unknown cap — no boost, just use absolute size
-    else:
+    if has_cap:
         pct = (amount_usd / market_cap) * 100
-        if   pct >= 50: score += 60
-        elif pct >= 25: score += 50
-        elif pct >= 10: score += 35
-        elif pct >= 5:  score += 20
-        elif pct >= 2:  score += 10
-        else:           score += 2
+        # Only meaningful if contract is at least 1% of market cap
+        if   pct >= 50: score += 70
+        elif pct >= 25: score += 55
+        elif pct >= 10: score += 40
+        elif pct >= 5:  score += 30
+        elif pct >= 2:  score += 22
+        elif pct >= 1:  score += 15
+        else:           score += 0  # less than 1% — not interesting
+    else:
+        # No market cap — only score very large contracts
+        if   amount_usd >= 1_000_000_000: score += 35  # $1B+
+        elif amount_usd >= 500_000_000:   score += 25  # $500M+
+        elif amount_usd >= 100_000_000:   score += 15  # $100M+
+        else:                             score += 0   # skip small unknown caps
 
-    if   amount_usd >= 500_000_000: score += 40
-    elif amount_usd >= 100_000_000: score += 30
-    elif amount_usd >= 50_000_000:  score += 20
-    elif amount_usd >= 10_000_000:  score += 10
-    elif amount_usd >= 5_000_000:   score += 5
-
+    # Duration bonus
     if   years >= 5: score += 10
     elif years >= 3: score += 7
     elif years >= 2: score += 4
@@ -592,7 +594,7 @@ def fetch_us_awards():
             data = json.loads(r.read())
         results = []
         page = 1
-        while page <= 5:  # max 5 pages = 500 contracts
+        while page <= 2:  # max 2 pages = 200 contracts
             payload_obj = json.loads(payload)
             payload_obj["page"] = page
             req = urllib.request.Request(
@@ -976,7 +978,7 @@ def check():
     log.info(f"Check — {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}")
 
     all_awards = []
-    for label, fn in [("DoD", fetch_dod_awards), ("USA", fetch_us_awards), ("8-K", fetch_8k_filings)]:
+    for label, fn in [("DoD", fetch_dod_awards), ("USA", fetch_us_awards)]:
         try:
             awards = fn()
             all_awards.extend(awards)
@@ -1003,9 +1005,10 @@ def check():
         price, cap = get_stock_info(ticker)
         years      = get_years(award.get("awarded",""), award.get("expires",""))
         score, rating = score_deal(award.get("amount_usd",0), cap, years)
+        cap_str = fmt_usd(cap) if cap else "NO CAP"
 
         log.info(f"NEW [{award['country']}] {award['recipient']} | "
-                 f"{fmt_usd(award.get('amount_usd',0))} | ${ticker} | {score}/100 {rating}")
+                 f"{fmt_usd(award.get('amount_usd',0))} | ${ticker} | cap={cap_str} | {score}/100 {rating}")
 
         if score >= MIN_DEAL_SCORE:
             try:
@@ -1019,6 +1022,27 @@ def check():
 
     log.info(f"Done — {new} contract alerts sent")
     check_insiders()
+
+def check_8k():
+    try:
+        awards = fetch_8k_filings()
+        for award in awards:
+            uid = award.get("uid")
+            if not uid or already_seen(uid): continue
+            ticker = award.get("ticker") or find_ticker(award["recipient"])
+            if not ticker: continue
+            price, cap = get_stock_info(ticker)
+            years = get_years(award.get("awarded",""), award.get("expires",""))
+            score, rating = score_deal(award.get("amount_usd",0), cap, years)
+            if score >= MIN_DEAL_SCORE:
+                try:
+                    send_contract_alert(award, ticker, score, rating, price, cap)
+                except Exception as e:
+                    log.error(f"8-K push failed: {e}")
+            mark_seen(uid, award["recipient"], award.get("amount_usd",0),
+                      award.get("agency",""), award["country"], ticker, score)
+    except Exception as e:
+        log.error(f"8-K check failed: {e}")
 
 # =========================================================
 # MAIN LOOP
@@ -1043,6 +1067,16 @@ def run_bot():
         if (datetime.now() - last_cleanup).days >= 7:
             cleanup_old()
             last_cleanup = datetime.now()
+
+        # Run 8-K check every 4th cycle (~hourly)
+        if not hasattr(run_bot, "_cycle"):
+            run_bot._cycle = 0
+        run_bot._cycle += 1
+        if run_bot._cycle % 4 == 0:
+            try:
+                check_8k()
+            except Exception as e:
+                log.error(f"8-K cycle failed: {e}")
 
         log.info(f"Sleeping {CHECK_MINUTES}min...")
         time.sleep(CHECK_MINUTES * 60)
