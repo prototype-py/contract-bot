@@ -20,7 +20,7 @@ NTFY_TOPIC          = "my-contract-alerts"
 MIN_AWARD_USD       = 5_000_000
 CHECK_MINUTES       = 15
 DATABASE            = "contracts.db"
-MIN_DEAL_SCORE      = 20
+MIN_DEAL_SCORE      = 10
 MIN_INSIDER_BUY_USD = 250_000
 
 # =========================================================
@@ -333,10 +333,11 @@ def score_deal(amount_usd, market_cap, years):
         elif pct >= 2:  score += 10
         else:           score += 2
 
-    if   amount_usd >= 500_000_000: score += 20
-    elif amount_usd >= 100_000_000: score += 15
-    elif amount_usd >= 50_000_000:  score += 10
-    elif amount_usd >= 10_000_000:  score += 5
+    if   amount_usd >= 500_000_000: score += 40
+    elif amount_usd >= 100_000_000: score += 30
+    elif amount_usd >= 50_000_000:  score += 20
+    elif amount_usd >= 10_000_000:  score += 10
+    elif amount_usd >= 5_000_000:   score += 5
 
     if   years >= 5: score += 10
     elif years >= 3: score += 7
@@ -558,7 +559,9 @@ def fetch_dod_awards():
     return results
 
 # =========================================================
-# USA — USASpending.gov (48hr window, all agencies)
+# USA — USASpending.gov transactions endpoint
+# Uses action_date — when the contract action actually occurred
+# This is the correct field for "new contracts awarded today"
 # =========================================================
 
 def fetch_us_awards():
@@ -568,12 +571,15 @@ def fetch_us_awards():
         payload = json.dumps({
             "filters": {
                 "award_type_codes": ["A","B","C","D"],
-                "time_period": [{"start_date": start.strftime("%Y-%m-%d"),
-                                 "end_date":   end.strftime("%Y-%m-%d")}],
+                # action_date = when this specific contract action was taken
+                # Filters out old contracts that just have old start dates
+                "action_date": {"start_date": start.strftime("%Y-%m-%d"),
+                                "end_date":   end.strftime("%Y-%m-%d")},
                 "award_amounts": [{"lower_bound": MIN_AWARD_USD}],
             },
             "fields": ["Award ID","Recipient Name","Award Amount","Awarding Agency",
-                       "Description","Start Date","End Date"],
+                       "Description","Action Date","Period of Performance Start Date",
+                       "Period of Performance Current End Date"],
             "sort": "Award Amount", "order": "desc", "limit": 100, "page": 1,
         }).encode()
         req = urllib.request.Request(
@@ -591,7 +597,7 @@ def fetch_us_awards():
             payload_obj["page"] = page
             req = urllib.request.Request(
                 "https://api.usaspending.gov/api/v2/search/spending_by_award/",
-                data=json.dumps(payload_obj).encode(),
+                data=json.dumps(payload_obj).encode() if isinstance(payload_obj, dict) else payload_obj,
                 headers={"Content-Type":"application/json","User-Agent":"ContractBot/1.0"},
                 method="POST",
             )
