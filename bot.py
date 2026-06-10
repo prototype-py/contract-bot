@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 NTFY_TOPIC          = "my-contract-alerts"
 MIN_AWARD_USD       = 5_000_000
-CHECK_MINUTES       = 30
+CHECK_MINUTES       = 60
 DATABASE            = "contracts.db"
 MIN_DEAL_SCORE      = 20
 MIN_INSIDER_BUY_USD = 250_000
@@ -498,6 +498,180 @@ def fetch_uk_awards():
         log.warning(f"UK fetch failed: {e}")
         return []
 
+
+# =========================================================
+# FETCH USA — SAM.gov Contract Awards API (FPDS direct)
+# Civilian contracts appear same day or next day
+# DoD covered separately via globalsecurity
+# =========================================================
+
+def fetch_us_awards():
+    try:
+        # Date range — last 2 days to catch any same-day postings
+        end   = datetime.now()
+        start = end - timedelta(hours=1)
+        date_from = start.strftime("%m/%d/%Y")
+        date_to   = end.strftime("%m/%d/%Y")
+
+        # SAM.gov Contract Awards public API — no key needed for civilian data
+        # Filter: signed in last 2 days, over MIN_AWARD_USD, non-DoD agencies
+        url = (
+            f"https://api.sam.gov/contract-awards/v1/search?"
+            f"api_key=DEMO_KEY"
+            f"&dateSignedFrom={date_from}"
+            f"&dateSignedTo={date_to}"
+            f"&dollarObligatedFrom={MIN_AWARD_USD:.0f}"
+            f"&limit=100"
+            f"&fundingAgencyName=!DEPT+OF+DEFENSE"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0","Accept":"application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+
+        results = []
+        for a in data.get("contractAwardsData", data.get("data", [])):
+            recipient = (a.get("awardee",{}).get("legalBusinessName","") or
+                        a.get("awardeeName","") or "Unknown")
+            amt = float(a.get("dollarObligated") or a.get("totalDollarsObligated") or 0)
+            if amt < MIN_AWARD_USD: continue
+            agency   = (a.get("fundingAgency",{}).get("name","") or
+                       a.get("fundingAgencyName",""))
+            awarded  = (a.get("dateSigned","") or a.get("awardDate",""))[:10]
+            desc     = (a.get("descriptionOfContractRequirement","") or
+                       a.get("description",""))[:150]
+            uid = hashlib.sha256(f"USA|{recipient}|{amt:.0f}|{awarded}".encode()).hexdigest()
+            results.append({
+                "uid": uid, "recipient": recipient,
+                "amount": amt, "amount_usd": amt,
+                "agency": agency, "desc": desc,
+                "awarded": awarded, "expires": "",
+                "country": "USA", "source": "SAM.gov (FPDS)",
+            })
+        log.info(f"USA: {len(results)} contracts")
+        return results
+    except Exception as e:
+        log.warning(f"SAM.gov fetch failed: {e}")
+        # Fallback to USASpending
+        return fetch_us_awards_fallback()
+
+def fetch_us_awards_fallback():
+    """USASpending fallback — broader but slower data"""
+    try:
+        end   = datetime.now()
+        start = end - timedelta(hours=1)
+        payload = json.dumps({
+            "filters": {
+                "award_type_codes": ["A","B","C","D"],
+                "time_period": [{"start_date": start.strftime("%Y-%m-%d"),
+                                 "end_date":   end.strftime("%Y-%m-%d")}],
+                "award_amounts": [{"lower_bound": MIN_AWARD_USD}],
+            },
+            "fields": ["Award ID","Recipient Name","Award Amount","Awarding Agency",
+                       "Description","Start Date","End Date"],
+            "sort": "Award Amount", "order": "desc", "limit": 100, "page": 1,
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.usaspending.gov/api/v2/search/spending_by_award/",
+            data=payload,
+            headers={"Content-Type":"application/json","User-Agent":"ContractBot/1.0"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+        results = []
+        for a in data.get("results", []):
+            amt = float(a.get("Award Amount") or 0)
+            if amt < MIN_AWARD_USD: continue
+            uid = hashlib.sha256(
+                f"USA|{a.get('Recipient Name','')}|{amt:.0f}|{a.get('Start Date','')}".encode()
+            ).hexdigest()
+            results.append({
+                "uid": uid,
+                "recipient": a.get("Recipient Name",""),
+                "amount": amt, "amount_usd": amt,
+                "agency": a.get("Awarding Agency",""),
+                "desc": (a.get("Description") or "")[:150],
+                "awarded": a.get("Start Date",""),
+                "expires": a.get("End Date",""),
+                "country": "USA", "source": "USASpending.gov",
+            })
+        log.info(f"USA (fallback): {len(results)} contracts")
+        return results
+    except Exception as e:
+        log.warning(f"USASpending fallback failed: {e}")
+        return []
+
+# =========================================================
+# FETCH CANADA — CanadaBuys CSV (daily update)
+# =========================================================
+
+def fetch_canada_awards():
+    try:
+        since = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        year  = datetime.now().year
+        content = None
+        for y in [year, year - 1]:
+            url = f"https://canadabuys.canada.ca/opendata/pub/{y}-{y+1}-awardNotice-avisAttribution.csv"
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent":"ContractBot/1.0"})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    content = r.read().decode("utf-8-sig")
+                break
+            except:
+                continue
+        if not content:
+            log.warning("Canada: CSV not available")
+            return []
+
+        # CAD to USD approximate
+        cad_rate = 0.73
+        min_cad  = MIN_AWARD_USD / cad_rate
+
+        results = []
+        reader  = csv.DictReader(io.StringIO(content))
+        for row in reader:
+            val_str = ""
+            for f in ["contractValue-valeurContrat","totalValue-valeurTotale","contract_value"]:
+                if row.get(f): val_str = row[f]; break
+            try: amount_cad = float(str(val_str).replace(",","").replace("$","").strip() or 0)
+            except: amount_cad = 0
+            if amount_cad < min_cad: continue
+
+            awarded = ""
+            for f in ["publicationDate-datePublication","contractDate-dateContrat","contract_date"]:
+                if row.get(f): awarded = str(row[f])[:10]; break
+            if not awarded or awarded < since: continue
+
+            vendor = ""
+            for f in ["vendorName-nomFournisseur","vendor_name","supplierName-nomFournisseur"]:
+                if row.get(f): vendor = row[f]; break
+            if not vendor: continue
+
+            ref = ""
+            for f in ["referenceNumber-numeroReference","reference_number"]:
+                if row.get(f): ref = row[f]; break
+            if not ref:
+                ref = hashlib.sha256(f"{vendor}|{awarded}|{amount_cad}".encode()).hexdigest()[:16]
+
+            uid = hashlib.sha256(f"CA|{vendor}|{amount_cad:.0f}|{awarded}".encode()).hexdigest()
+            amount_usd = amount_cad * cad_rate
+
+            results.append({
+                "uid": uid,
+                "recipient": vendor,
+                "amount": amount_cad, "amount_usd": amount_usd,
+                "agency": row.get("ownerAcronym-acronymeProprietaire",""),
+                "desc": str(row.get("description-descriptionDuContrat") or "")[:150],
+                "awarded": awarded, "expires": "",
+                "country": "Canada",
+                "source": "CanadaBuys.canada.ca",
+            })
+        log.info(f"Canada: {len(results)} contracts")
+        return results
+    except Exception as e:
+        log.warning(f"Canada failed: {e}")
+        return []
+
 # =========================================================
 # SEC INSIDER — Form 4 XML parser
 # =========================================================
@@ -647,7 +821,8 @@ def check():
     log.info(f"Check — {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}")
 
     all_awards = []
-    for label, fn in [("DoD", fetch_dod_awards), ("UK", fetch_uk_awards)]:
+    for label, fn in [("DoD", fetch_dod_awards), ("UK", fetch_uk_awards),
+                      ("USA", fetch_us_awards), ("Canada", fetch_canada_awards)]:
         try:
             awards = fn()
             all_awards.extend(awards)
@@ -720,7 +895,7 @@ def run_bot():
 
 print("=" * 55)
 print("  CONTRACT ALERT BOT")
-print(f"  DoD (globalsecurity) + UK Contracts Finder")
+print(f"  DoD + UK + USA (non-DoD) + Canada")
 print(f"  {len(INSIDER_WATCHLIST)} insider tickers | {len(KNOWN)} known companies")
 print(f"  Min award: $5M | Min score: {MIN_DEAL_SCORE} | Every {CHECK_MINUTES}min")
 print("=" * 55)
