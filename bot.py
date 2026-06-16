@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 # =========================================================
 
 NTFY_TOPIC          = "my-contract-alerts"
-MIN_AWARD_USD       = 25_000_000  # pre-filter noise, % of cap does the real work
+MIN_AWARD_USD       = 25_000_000  # % of cap does the real filtering
 CHECK_MINUTES       = 15
 DATABASE            = "contracts.db"
 MIN_DEAL_SCORE      = 25
@@ -287,33 +287,76 @@ def get_stock_info(ticker):
         price, cap, ts = _stock_cache[ticker]
         if (datetime.now() - ts).total_seconds() < 600:
             return price, cap
-    # quoteSummary returns marketCap reliably unlike /chart/
+    # Try Yahoo Finance
     try:
         url = (f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
                f"?modules=price")
         req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
-        p    = data["quoteSummary"]["result"][0]["price"]
-        price = p.get("regularMarketPrice", {}).get("raw", 0)
-        cap   = p.get("marketCap", {}).get("raw", 0)
-        _stock_cache[ticker] = (price, cap, datetime.now())
-        return price, cap
-    except:
-        pass
-    # Fallback to chart endpoint
-    try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
-        req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read())
-        meta  = data["chart"]["result"][0]["meta"]
-        price = meta.get("regularMarketPrice", 0)
-        cap   = meta.get("marketCap", 0)
-        _stock_cache[ticker] = (price, cap, datetime.now())
-        return price, cap
+        p     = data["quoteSummary"]["result"][0]["price"]
+        price = p.get("regularMarketPrice", {}).get("raw", 0)
+        cap   = p.get("marketCap", {}).get("raw", 0)
+        if cap and cap > 0:
+            _stock_cache[ticker] = (price, cap, datetime.now())
+            return price, cap
     except:
-        return None, None
+        pass
+    # Use hardcoded market cap if Yahoo fails
+    cap = MARKET_CAPS.get(ticker, 0)
+    _stock_cache[ticker] = (0, cap, datetime.now())
+    return None, cap
+
+
+# Hardcoded market caps (approximate, update monthly)
+# Source: as of June 2026
+MARKET_CAPS = {
+    "LMT":  110_000_000_000,
+    "RTX":   95_000_000_000,
+    "NOC":   70_000_000_000,
+    "GD":    75_000_000_000,
+    "BA":    95_000_000_000,
+    "HII":    8_000_000_000,
+    "LHX":   20_000_000_000,
+    "TXT":   16_000_000_000,
+    "LDOS":  20_000_000_000,
+    "BAH":   14_000_000_000,
+    "SAIC":   6_000_000_000,
+    "CACI":   6_500_000_000,
+    "PSN":    6_000_000_000,
+    "PLTR":  300_000_000_000,
+    "ACN":   200_000_000_000,
+    "KTOS":    3_000_000_000,
+    "MRCY":    1_500_000_000,
+    "DRS":     3_500_000_000,
+    "CW":      3_500_000_000,
+    "KBR":     7_000_000_000,
+    "FLR":     5_000_000_000,
+    "J":      16_000_000_000,
+    "TTEK":    5_500_000_000,
+    "ACM":     9_000_000_000,
+    "MMS":     4_500_000_000,
+    "ICFI":    1_800_000_000,
+    "HEI":    22_000_000_000,
+    "BWXT":    6_000_000_000,
+    "RKLB":    8_000_000_000,
+    "VSEC":    1_200_000_000,
+    "IBM":   150_000_000_000,
+    "HON":   130_000_000_000,
+    "GE":    170_000_000_000,
+    "GEHC":   40_000_000_000,
+    "HUM":    30_000_000_000,
+    "ORCL":  400_000_000_000,
+    "MSFT": 3_000_000_000_000,
+    "AMZN": 2_000_000_000_000,
+    "GOOGL":2_000_000_000_000,
+    "AMTM":   5_000_000_000,
+    "SPR":      900_000_000,
+    "ESLT":   10_000_000_000,
+    "CYBR":   15_000_000_000,
+    "CHKP":   18_000_000_000,
+    "TGI":       400_000_000,
+}
 
 # =========================================================
 # SCORING
@@ -611,6 +654,12 @@ def fetch_us_awards():
             for a in page_results:
                 amt = float(a.get("Award Amount") or 0)
                 if amt < MIN_AWARD_USD:
+                    continue
+                # Skip IDIQ contract vehicles — these are ceiling amounts not real awards
+                desc_lower = (a.get("Description") or "").lower()
+                if any(x in desc_lower for x in ["idiq", "indefinite delivery", "indefinite-delivery",
+                                                   "task order", "delivery order", "modification"]):
+                    log.info(f"  IDIQ/mod filtered: {a.get('Recipient Name','')} {fmt_usd(amt)}")
                     continue
                 uid = hashlib.sha256(
                     f"USA|{a.get('Recipient Name','')}|{amt:.0f}|{a.get('Start Date','')}".encode()
@@ -1016,6 +1065,8 @@ def check():
                 new += 1
             except Exception as e:
                 log.error(f"Push failed: {e}")
+        else:
+            log.info(f"  Below threshold: ${ticker} {fmt_usd(award.get('amount_usd',0))} cap={fmt_usd(cap) if cap else 'NONE'} score={score}")
 
         mark_seen(uid, award["recipient"], award.get("amount_usd",0),
                   award.get("agency",""), award["country"], ticker, score)
