@@ -616,16 +616,13 @@ def fetch_us_awards():
         payload = json.dumps({
             "filters": {
                 "award_type_codes": ["A","B","C","D"],
-                # action_date = when this specific contract action was taken
-                # Filters out old contracts that just have old start dates
-                "action_date": {"start_date": start.strftime("%Y-%m-%d"),
-                                "end_date":   end.strftime("%Y-%m-%d")},
+                "time_period": [{"start_date": start.strftime("%Y-%m-%d"),
+                                 "end_date":   end.strftime("%Y-%m-%d")}],
                 "award_amounts": [{"lower_bound": MIN_AWARD_USD}],
             },
             "fields": ["Award ID","Recipient Name","Award Amount","Awarding Agency",
-                       "Description","Action Date","Period of Performance Start Date",
-                       "Period of Performance Current End Date"],
-            "sort": "Award Amount", "order": "desc", "limit": 100, "page": 1,
+                       "Description","Start Date","End Date","Award Date"],
+            "sort": "Start Date", "order": "desc", "limit": 100, "page": 1,
         }).encode()
         req = urllib.request.Request(
             "https://api.usaspending.gov/api/v2/search/spending_by_award/",
@@ -655,11 +652,19 @@ def fetch_us_awards():
                 amt = float(a.get("Award Amount") or 0)
                 if amt < MIN_AWARD_USD:
                     continue
-                # Skip IDIQ contract vehicles — these are ceiling amounts not real awards
+                # Hard date filter — reject contracts not recently awarded
+                award_date = a.get("Award Date","") or a.get("Start Date","")
+                if award_date:
+                    try:
+                        awarded_dt = datetime.strptime(award_date[:10], "%Y-%m-%d")
+                        if (datetime.now() - awarded_dt).days > 7:
+                            continue  # silently skip old contracts
+                    except:
+                        pass
+                # Skip obvious IDIQ/modification keywords
                 desc_lower = (a.get("Description") or "").lower()
-                if any(x in desc_lower for x in ["idiq", "indefinite delivery", "indefinite-delivery",
-                                                   "task order", "delivery order", "modification"]):
-                    log.info(f"  IDIQ/mod filtered: {a.get('Recipient Name','')} {fmt_usd(amt)}")
+                if any(x in desc_lower for x in ["idiq", "indefinite delivery",
+                                                   "task order", "delivery order"]):
                     continue
                 uid = hashlib.sha256(
                     f"USA|{a.get('Recipient Name','')}|{amt:.0f}|{a.get('Start Date','')}".encode()
